@@ -30,12 +30,7 @@ pub fn main()
 					eprintln!("missing assembly file argument");
 					return;
 				};
-				let Some(fop) = args.next()
-				else
-				{
-					eprintln!("missing output file argument");
-					return;
-				};
+				let out_arg = args.next();
 				
 				let mut buff = Vec::new();
 				let mut fi = OpenOptions::new().read(true).open(fip).unwrap();
@@ -43,9 +38,13 @@ pub fn main()
 				drop(fi);
 				if assembler::assemble(&mut buff)
 				{
-					let mut fo = OpenOptions::new().write(true).create(true).open(fop).unwrap();
-					fo.write_all(&buff.as_ref()).unwrap();
-					drop(fo);
+					if let Some(fop) = out_arg
+					{
+						let mut fo = OpenOptions::new().write(true).create(true).open(fop).unwrap();
+						fo.write_all(&buff.as_ref()).unwrap();
+						drop(fo);
+					}
+					else {println!("Assembled successfully");}
 				}
 			},
 			"disassemble" =>
