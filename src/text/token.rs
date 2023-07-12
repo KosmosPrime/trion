@@ -24,7 +24,6 @@ pub enum TokenValue<'l>
 	Not, And, Or, ExclusiveOr, LeftShift, RightShift,
 	Number(Number),
 	Identifier(&'l str),
-	// TODO implement Character(char),
 	// TODO implement String(Cow<'l, str>),
 	// TODO implement ByteString(Cow<'l, [u8]>),
 	BeginGroup, EndGroup,
@@ -388,6 +387,73 @@ impl<'l> Tokenizer<'l>
 						}
 					}
 				},
+				b'\'' =>
+				{
+					let base = pos;
+					pos += 1;
+					let mut result: Option<char> = None;
+					while pos < self.data.len()
+					{
+						let c = self.data[pos];
+						if c == b'\''
+						{
+							match result
+							{
+								None => break,
+								Some(v) =>
+								{
+									pos += 1;
+									self.data = &self.data[pos..];
+									let t = Token{line: self.line, col: self.col, value: TokenValue::Number(Number::Integer(u32::from(v).into()))};
+									self.advance(0, pos - base);
+									return Some(Ok(t));
+								},
+							}
+						}
+						if result.is_some() {break;}
+						if c == b'\\'
+						{
+							pos += 1;
+							if pos >= self.data.len() {break;}
+							result = match c
+							{
+								b't' => Some('\t'),
+								b'n' => Some('\n'),
+								b'r' => Some('\r'),
+								b'"' | b'\'' | b'\\' => Some(char::try_from(c).unwrap()),
+								_ => break,
+							};
+						}
+						else if c == b'\t' || (c >= b' ' && c <= b'~')
+						{
+							result = Some(char::try_from(c).unwrap());
+						}
+						else if c >= 0x80
+						{
+							let n = if c >= 0xF0 {4} else if c >= 0xE0 {3} else {2};
+							if self.data.len() - pos < n {break;}
+							match core::str::from_utf8(&self.data[pos..pos + n])
+							{
+								Ok(s) => result = Some(s.chars().next().unwrap()),
+								Err(..) =>
+								{
+									self.data = b"";
+									self.advance(0, pos - base);
+									return Some(Err(TokenError{kind: TokenErrorKind::Invalid, line: self.line, col: self.col}));
+								},
+							}
+						}
+						else
+						{
+							self.data = b"";
+							self.advance(0, pos - base);
+							return Some(Err(TokenError{kind: TokenErrorKind::Invalid, line: self.line, col: self.col}));
+						}
+						pos += 1;
+					}
+					self.data = b"";
+					Err(TokenError{kind: TokenErrorKind::BadCharacter, line: self.line, col: self.col})
+				},
 				b'A'..=b'Z' | b'_' | b'a'..=b'z' =>
 				{
 					let base = pos;
@@ -485,6 +551,7 @@ pub enum TokenErrorKind
 	Invalid,
 	BlockComment,
 	BadNumber,
+	BadCharacter,
 	Unexpected(char),
 }
 
@@ -497,6 +564,7 @@ impl fmt::Display for TokenError
 			TokenErrorKind::Invalid => f.write_str("invalid character")?,
 			TokenErrorKind::BlockComment => f.write_str("unclosed block comment")?,
 			TokenErrorKind::BadNumber => f.write_str("malformed number")?,
+			TokenErrorKind::BadCharacter => f.write_str("malformed character literal")?,
 			TokenErrorKind::Unexpected(c) => write!(f, "unexpected character {c:?}")?,
 		}
 		write!(f, " ({}:{})", self.line, self.col)
