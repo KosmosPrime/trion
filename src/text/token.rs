@@ -1,19 +1,15 @@
 use core::fmt;
 use std::error::Error;
 
+use crate::text::Positioned;
+
 #[derive(Clone, Copy, Debug)]
 pub enum Number
 {
 	Integer(i64),
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Token<'l>
-{
-	pub value: TokenValue<'l>,
-	pub line: u32,
-	pub col: u32,
-}
+pub type Token<'l> = Positioned<TokenValue<'l>>;
 
 #[derive(Clone, Copy, Debug)]
 pub enum TokenValue<'l>
@@ -162,7 +158,7 @@ impl<'l> Tokenizer<'l>
 					if let Some(d) = depth.checked_add(1) {depth = d;}
 					else
 					{
-						return Some(TokenError{kind: TokenErrorKind::BlockComment, line: self.line, col: self.col});
+						return Some(TokenError{value: TokenErrorKind::BlockComment, line: self.line, col: self.col});
 					}
 				},
 				b'*' if pos + 1 < self.data.len() && self.data[pos + 1] == b'/' =>
@@ -179,7 +175,7 @@ impl<'l> Tokenizer<'l>
 			self.advance(lines, pos - col_base);
 			None
 		}
-		else {Some(TokenError{kind: TokenErrorKind::BlockComment, line: self.line, col: self.col})}
+		else {Some(TokenError{value: TokenErrorKind::BlockComment, line: self.line, col: self.col})}
 	}
 	
 	pub fn clear(&mut self)
@@ -211,7 +207,7 @@ impl<'l> Tokenizer<'l>
 				0x00..=0x1F | 0x7F.. =>
 				{
 					self.data = b"";
-					return Some(Err(TokenError{kind: TokenErrorKind::Invalid, line: self.line, col: self.col}));
+					return Some(Err(TokenError{value: TokenErrorKind::Invalid, line: self.line, col: self.col}));
 				},
 				b'/' if pos + 1 < self.data.len() && self.data[pos + 1] == b'/' =>
 				{
@@ -237,98 +233,98 @@ impl<'l> Tokenizer<'l>
 				b',' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Separator};
+					let t = Token{value: TokenValue::Separator, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b';' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Terminator};
+					let t = Token{value: TokenValue::Terminator, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b':' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::LabelMark};
+					let t = Token{value: TokenValue::LabelMark, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'.' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::DirectiveMark};
+					let t = Token{value: TokenValue::DirectiveMark, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'+' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Add};
+					let t = Token{value: TokenValue::Add, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'-' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Subtract};
+					let t = Token{value: TokenValue::Subtract, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'*' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Multiply};
+					let t = Token{value: TokenValue::Multiply, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'/' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Divide};
+					let t = Token{value: TokenValue::Divide, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'!' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Not};
+					let t = Token{value: TokenValue::Not, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'&' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::And};
+					let t = Token{value: TokenValue::And, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'|' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Or};
+					let t = Token{value: TokenValue::Or, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'^' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::ExclusiveOr};
+					let t = Token{value: TokenValue::ExclusiveOr, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'<' if pos + 1 < self.data.len() && self.data[pos + 1] == b'<' =>
 				{
 					self.data = &self.data[pos + 2..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::LeftShift};
+					let t = Token{value: TokenValue::LeftShift, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(2);
 					Ok(t)
 				},
 				b'>' if pos + 1 < self.data.len() && self.data[pos + 1] == b'>' =>
 				{
 					self.data = &self.data[pos + 2..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::RightShift};
+					let t = Token{value: TokenValue::RightShift, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(2);
 					Ok(t)
 				},
@@ -364,7 +360,7 @@ impl<'l> Tokenizer<'l>
 					{
 						assert_eq!(pos - base, 1); // only a zero (assumed octal)
 						self.data = &self.data[pos..];
-						let t = Token{line: self.line, col: self.col, value: TokenValue::Number(Number::Integer(0))};
+						let t = Token{value: TokenValue::Number(Number::Integer(0)), line: self.line, col: self.col};
 						self.col = self.col.saturating_add(1);
 						Ok(t)
 					}
@@ -375,14 +371,14 @@ impl<'l> Tokenizer<'l>
 							Ok(v) =>
 							{
 								self.data = &self.data[pos..];
-								let t = Token{line: self.line, col: self.col, value: TokenValue::Number(Number::Integer(v))};
+								let t = Token{value: TokenValue::Number(Number::Integer(v)), line: self.line, col: self.col};
 								self.advance(0, pos - base);
 								Ok(t)
 							},
 							Err(..) =>
 							{
 								self.data = b"";
-								Err(TokenError{kind: TokenErrorKind::BadNumber, line: self.line, col: self.col})
+								Err(TokenError{value: TokenErrorKind::BadNumber, line: self.line, col: self.col})
 							},
 						}
 					}
@@ -404,7 +400,7 @@ impl<'l> Tokenizer<'l>
 								{
 									pos += 1;
 									self.data = &self.data[pos..];
-									let t = Token{line: self.line, col: self.col, value: TokenValue::Number(Number::Integer(u32::from(v).into()))};
+									let t = Token{value: TokenValue::Number(Number::Integer(u32::from(v).into())), line: self.line, col: self.col};
 									self.advance(0, pos - base);
 									return Some(Ok(t));
 								},
@@ -439,7 +435,7 @@ impl<'l> Tokenizer<'l>
 								{
 									self.data = b"";
 									self.advance(0, pos - base);
-									return Some(Err(TokenError{kind: TokenErrorKind::Invalid, line: self.line, col: self.col}));
+									return Some(Err(TokenError{value: TokenErrorKind::Invalid, line: self.line, col: self.col}));
 								},
 							}
 						}
@@ -447,12 +443,12 @@ impl<'l> Tokenizer<'l>
 						{
 							self.data = b"";
 							self.advance(0, pos - base);
-							return Some(Err(TokenError{kind: TokenErrorKind::Invalid, line: self.line, col: self.col}));
+							return Some(Err(TokenError{value: TokenErrorKind::Invalid, line: self.line, col: self.col}));
 						}
 						pos += 1;
 					}
 					self.data = b"";
-					Err(TokenError{kind: TokenErrorKind::BadCharacter, line: self.line, col: self.col})
+					Err(TokenError{value: TokenErrorKind::BadCharacter, line: self.line, col: self.col})
 				},
 				b'A'..=b'Z' | b'_' | b'a'..=b'z' =>
 				{
@@ -470,56 +466,56 @@ impl<'l> Tokenizer<'l>
 					// SAFETY: checked to be ASCII by matcher
 					let val = unsafe{core::str::from_utf8_unchecked(&self.data[base..pos])};
 					self.data = &self.data[pos..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::Identifier(val)};
+					let t = Token{value: TokenValue::Identifier(val), line: self.line, col: self.col};
 					self.advance(0, pos - base);
 					Ok(t)
 				},
 				b'(' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::BeginGroup};
+					let t = Token{value: TokenValue::BeginGroup, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b')' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::EndGroup};
+					let t = Token{value: TokenValue::EndGroup, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'[' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::BeginAddr};
+					let t = Token{value: TokenValue::BeginAddr, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b']' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::EndAddr};
+					let t = Token{value: TokenValue::EndAddr, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'{' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::BeginSeq};
+					let t = Token{value: TokenValue::BeginSeq, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				b'}' =>
 				{
 					self.data = &self.data[pos + 1..];
-					let t = Token{line: self.line, col: self.col, value: TokenValue::EndSeq};
+					let t = Token{value: TokenValue::EndSeq, line: self.line, col: self.col};
 					self.col = self.col.saturating_add(1);
 					Ok(t)
 				},
 				c =>
 				{
 					self.data = b"";
-					Err(TokenError{kind: TokenErrorKind::Unexpected(c as char), line: self.line, col: self.col})
+					Err(TokenError{value: TokenErrorKind::Unexpected(c as char), line: self.line, col: self.col})
 				},
 			});
 		}
@@ -537,13 +533,7 @@ impl<'l> Iterator for Tokenizer<'l>
 	}
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenError
-{
-	pub kind: TokenErrorKind,
-	pub line: u32,
-	pub col: u32,
-}
+pub type TokenError = Positioned<TokenErrorKind>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenErrorKind
@@ -555,20 +545,19 @@ pub enum TokenErrorKind
 	Unexpected(char),
 }
 
-impl fmt::Display for TokenError
+impl fmt::Display for TokenErrorKind
 {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
 	{
-		match self.kind
+		match self
 		{
-			TokenErrorKind::Invalid => f.write_str("invalid character")?,
-			TokenErrorKind::BlockComment => f.write_str("unclosed block comment")?,
-			TokenErrorKind::BadNumber => f.write_str("malformed number")?,
-			TokenErrorKind::BadCharacter => f.write_str("malformed character literal")?,
-			TokenErrorKind::Unexpected(c) => write!(f, "unexpected character {c:?}")?,
+			TokenErrorKind::Invalid => f.write_str("invalid character"),
+			TokenErrorKind::BlockComment => f.write_str("unclosed block comment"),
+			TokenErrorKind::BadNumber => f.write_str("malformed number"),
+			TokenErrorKind::BadCharacter => f.write_str("malformed character literal"),
+			TokenErrorKind::Unexpected(c) => write!(f, "unexpected character {c:?}"),
 		}
-		write!(f, " ({}:{})", self.line, self.col)
 	}
 }
 
-impl Error for TokenError {}
+impl Error for TokenErrorKind {}

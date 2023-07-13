@@ -2,6 +2,7 @@ use core::fmt;
 use core::iter::FusedIterator;
 use std::error::Error;
 
+use crate::text::Positioned;
 use crate::text::token::{Number, Token, TokenError, Tokenizer, TokenValue};
 
 // FIXME these should contain their own location info (or skip element parsing)
@@ -24,13 +25,7 @@ pub enum Argument<'l>
 	Function{name: &'l str, args: Vec<Argument<'l>>},
 }
 
-#[derive(Clone, Debug)]
-pub struct Element<'l>
-{
-	pub value: ElementValue<'l>,
-	pub line: u32,
-	pub col: u32,
-}
+pub type Element<'l> = Positioned<ElementValue<'l>>;
 
 #[derive(Clone, Debug)]
 pub enum ElementValue<'l>
@@ -62,12 +57,12 @@ impl<'l> Parser<'l>
 	
 	fn expect(expect: &'static str, have: Token) -> ParseError
 	{
-		ParseError{kind: ParseErrorKind::Expected{expect, have: have.value.desc()}, line: have.line, col: have.col}
+		ParseError{value: ParseErrorKind::Expected{expect, have: have.value.desc()}, line: have.line, col: have.col}
 	}
 	
 	fn eof(&self, expect: &'static str) -> ParseError
 	{
-		ParseError{kind: ParseErrorKind::Expected{expect, have: "<eof>"}, line: self.0.get_line(), col: self.0.get_column()}
+		ParseError{value: ParseErrorKind::Expected{expect, have: "<eof>"}, line: self.0.get_line(), col: self.0.get_column()}
 	}
 	
 	pub fn next_element(&mut self) -> Option<Result<Element<'l>, ParseError>>
@@ -264,13 +259,7 @@ impl<'l> Iterator for Parser<'l>
 
 impl<'l> FusedIterator for Parser<'l> {}
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ParseError
-{
-	pub kind: ParseErrorKind,
-	pub line: u32,
-	pub col: u32,
-}
+pub type ParseError = Positioned<ParseErrorKind>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ParseErrorKind
@@ -284,30 +273,29 @@ impl From<TokenError> for ParseError
 	fn from(value: TokenError) -> Self
 	{
 		let (line, col) = (value.line, value.col);
-		Self{kind: ParseErrorKind::Token(value), line, col}
+		Self{value: ParseErrorKind::Token(value), line, col}
 	}
 }
 
-impl fmt::Display for ParseError
+impl fmt::Display for ParseErrorKind
 {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
 	{
-		match self.kind
+		match self
 		{
-			ParseErrorKind::Token(..) => f.write_str("input token error")?,
-			ParseErrorKind::Expected{expect, have} => write!(f, "expected {expect}, got {have}")?,
+			ParseErrorKind::Token(..) => f.write_str("input token error"),
+			ParseErrorKind::Expected{expect, have} => write!(f, "expected {expect}, got {have}"),
 		}
-		write!(f, " ({}:{})", self.line, self.col)
 	}
 }
 
-impl Error for ParseError
+impl Error for ParseErrorKind
 {
 	fn source(&self) -> Option<&(dyn Error + 'static)>
 	{
 		match self
 		{
-			Self{kind: ParseErrorKind::Token(e), ..} => Some(e),
+			Self::Token(e) => Some(e),
 			_ => None,
 		}
 	}
