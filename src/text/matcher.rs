@@ -6,7 +6,7 @@ pub struct Matcher<'l>
 {
 	data: &'l [u8],
 	pos: usize,
-	err: bool,
+	eof: bool,
 	line: u32,
 	col: u32,
 }
@@ -15,7 +15,7 @@ impl<'l> Matcher<'l>
 {
 	pub fn new(data: &'l [u8]) -> Self
 	{
-		Self{data, pos: 0, err: false, line: 1, col: 1}
+		Self{data, pos: 0, eof: false, line: 1, col: 1}
 	}
 	
 	pub fn data(&self) -> &'l [u8]
@@ -43,9 +43,14 @@ impl<'l> Matcher<'l>
 		Positioned{value, line: self.line, col: self.col}
 	}
 	
+	pub fn clear(&mut self)
+	{
+		self.eof = true;
+	}
+	
 	pub fn has_next(&self) -> bool
 	{
-		!self.err && self.pos < self.data.len()
+		!self.eof && self.pos < self.data.len()
 	}
 	
 	pub fn next(&mut self) -> Option<Result<char, TokenError>>
@@ -73,7 +78,7 @@ impl<'l> Matcher<'l>
 			{
 				if self.data.len() - self.pos < 2 || (self.data[self.pos + 1] & 0xC0) != 0x80
 				{
-					self.err = true;
+					self.eof = true;
 					return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
 				}
 				val = (val << 6) | (self.data[self.pos + 1] & 0x3F) as u32;
@@ -82,7 +87,7 @@ impl<'l> Matcher<'l>
 				{
 					if self.data.len() - self.pos < 3 || (self.data[self.pos + 2] & 0xC0) != 0x80
 					{
-						self.err = true;
+						self.eof = true;
 						return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
 					}
 					val = ((val & 0b1111_111111) << 6) | (self.data[self.pos + 2] & 0x3F) as u32;
@@ -91,35 +96,35 @@ impl<'l> Matcher<'l>
 					{
 						if self.data.len() - self.pos < 4 || (self.data[self.pos + 3] & 0xC0) != 0x80
 						{
-							self.err = true;
+							self.eof = true;
 							return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
 						}
 						val = ((val & 0b111_111111_111111) << 6) | (self.data[self.pos + 3] & 0x3F) as u32;
 						
 						if (b0 & 0x08) != 0 || val < 0x10000 || val > 0x10FFFF
 						{
-							self.err = true;
+							self.eof = true;
 							return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
 						}
 						else {self.pos += 4;}
 					}
 					else if val < 0x800 || (val >= 0xD800 && val <= 0xDFFF)
 					{
-						self.err = true;
+						self.eof = true;
 						return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
 					}
 					else {self.pos += 3;}
 				}
 				else if val < 0x80
 				{
-					self.err = true;
+					self.eof = true;
 					return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
 				}
 				else {self.pos += 2;}
 			}
 			else
 			{
-				self.err = true;
+				self.eof = true;
 				return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
 			}
 			self.col = self.col.saturating_add(1);

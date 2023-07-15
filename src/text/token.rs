@@ -2,6 +2,7 @@ use core::fmt;
 use std::error::Error;
 
 use crate::text::Positioned;
+use crate::text::matcher::Matcher;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Number
@@ -68,456 +69,292 @@ impl<'l> fmt::Display for TokenValue<'l>
 }
 
 #[derive(Clone, Debug)]
-pub struct Tokenizer<'l>
+pub struct Tokenizer<'l>(Matcher<'l>);
+
+fn consume_line_comment<'l>(m: &mut Matcher<'l>) -> Result<(), TokenError>
 {
-	data: &'l [u8],
-	line: u32,
-	col: u32,
+	match m.search('\n')
+	{
+		Ok(..) => Ok(()),
+		Err(e) => Err(e),
+	}
+}
+
+fn consume_block_comment<'l>(m: &mut Matcher<'l>, line: u32, col: u32) -> Result<(), TokenError>
+{
+	let mut depth = 1usize;
+	let mut prev: Option<char> = None;
+	while let Some(curr) = m.next()
+	{
+		match curr
+		{
+			Ok(c) =>
+			{
+				if prev == Some('/') && c == '*'
+				{
+					depth += 1;
+					prev = None; // avoid matching the '*' again as "*/"
+				}
+				else if prev == Some('*') && c == '/'
+				{
+					depth -= 1;
+					if depth == 0 {return Ok(());}
+					prev = None; // avoid matching the '/' again as '/*'
+				}
+				else {prev = Some(c);}
+			},
+			Err(e) => return Err(e),
+		}
+	}
+	Err(Positioned{value: TokenErrorKind::BlockComment, line, col})
 }
 
 impl<'l> Tokenizer<'l>
 {
 	pub fn new(data: &'l [u8]) -> Self
 	{
-		Self{data, line: 1, col: 1}
+		Self(Matcher::new(data))
 	}
 	
 	pub fn get_line(&self) -> u32
 	{
-		self.line
+		self.0.line()
 	}
 	
 	pub fn get_column(&self) -> u32
 	{
-		self.col
-	}
-	
-	fn advance(&mut self, lines: usize, cols: usize)
-	{
-		let (lines, cols) = if u32::BITS < usize::BITS
-		{
-			(
-				if lines < u32::MAX as usize {lines as u32} else {u32::MAX},
-				if cols < u32::MAX as usize {cols as u32} else {u32::MAX},
-			)
-		}
-		else {(lines as u32, cols as u32)};
-		
-		if lines > 0
-		{
-			self.line = self.line.saturating_add(lines);
-			self.col = cols;
-		}
-		else
-		{
-			self.col = self.col.saturating_add(cols);
-		}
-	}
-	
-	fn consume_line_comment(&mut self, p: &mut usize) -> Option<TokenError>
-	{
-		let mut pos = *p + 2;
-		while pos < self.data.len()
-		{
-			match self.data[pos]
-			{
-				b'\n' =>
-				{
-					self.line = self.line.saturating_add(1);
-					self.col = 1;
-					*p = pos + 1;
-					return None;
-				},
-				// non-ascii is allowed in comments
-				_ => pos += 1,
-			}
-		}
-		self.advance(0, *p - pos);
-		*p = pos;
-		None
-	}
-	
-	fn consume_block_comment(&mut self, p: &mut usize, mut depth: usize) -> Option<TokenError>
-	{
-		let mut pos = *p + 2;
-		let mut lines = 0;
-		let mut col_base = *p;
-		while depth > 0 && pos < self.data.len()
-		{
-			match self.data[pos]
-			{
-				b'\n' =>
-				{
-					lines += 1;
-					col_base = pos - 1;
-					pos += 1;
-				},
-				b'/' if pos + 1 < self.data.len() && self.data[pos + 1] == b'*' =>
-				{
-					pos += 2;
-					if let Some(d) = depth.checked_add(1) {depth = d;}
-					else
-					{
-						return Some(TokenError{value: TokenErrorKind::BlockComment, line: self.line, col: self.col});
-					}
-				},
-				b'*' if pos + 1 < self.data.len() && self.data[pos + 1] == b'/' =>
-				{
-					pos += 2;
-					depth -= 1;
-				},
-				_ => pos += 1,
-			}
-		}
-		if depth == 0
-		{
-			*p = pos;
-			self.advance(lines, pos - col_base);
-			None
-		}
-		else {Some(TokenError{value: TokenErrorKind::BlockComment, line: self.line, col: self.col})}
+		self.0.column()
 	}
 	
 	pub fn clear(&mut self)
 	{
-		self.data = b"";
+		self.0.clear();
 	}
 	
 	pub fn next_token(&mut self) -> Option<Result<Token<'l>, TokenError>>
 	{
-		let mut pos = 0;
-		while pos < self.data.len()
+		let mut start = self.0.clone();
+		while let Some(curr) = self.0.next()
 		{
-			let c = self.data[pos];
-			let _: &Self = match c
+			let c = match curr
 			{
-				b'\n' =>
-				{
-					pos += 1;
-					self.line = self.line.saturating_add(1);
-					self.col = 1;
-					continue;
-				},
-				b'\t' | b'\r' | b' ' =>
-				{
-					pos += 1;
-					self.col = self.col.saturating_add(1);
-					continue;
-				},
-				0x00..=0x1F | 0x7F.. =>
-				{
-					self.data = b"";
-					return Some(Err(TokenError{value: TokenErrorKind::Invalid, line: self.line, col: self.col}));
-				},
-				b'/' if pos + 1 < self.data.len() && self.data[pos + 1] == b'/' =>
-				{
-					match self.consume_line_comment(&mut pos)
-					{
-						None => continue,
-						Some(e) => return Some(Err(e)),
-					}
-				},
-				b'/' if pos + 1 < self.data.len() && self.data[pos + 1] == b'*' =>
-				{
-					match self.consume_block_comment(&mut pos, 1)
-					{
-						None => continue,
-						Some(e) => return Some(Err(e)),
-					}
-				},
-				_ => self,
+				Ok(c) => c,
+				Err(e) => return Some(Err(e)),
 			};
 			
-			return Some(match c
+			match c
 			{
-				b',' =>
+				'\t' | '\n' | '\r' | ' ' => (),
+				'/' =>
 				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Separator, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b';' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Terminator, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b':' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::LabelMark, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'.' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::DirectiveMark, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'+' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Add, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'-' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Subtract, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'*' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Multiply, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'/' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Divide, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'!' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Not, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'&' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::And, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'|' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::Or, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'^' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::ExclusiveOr, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'<' if pos + 1 < self.data.len() && self.data[pos + 1] == b'<' =>
-				{
-					self.data = &self.data[pos + 2..];
-					let t = Token{value: TokenValue::LeftShift, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(2);
-					Ok(t)
-				},
-				b'>' if pos + 1 < self.data.len() && self.data[pos + 1] == b'>' =>
-				{
-					self.data = &self.data[pos + 2..];
-					let t = Token{value: TokenValue::RightShift, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(2);
-					Ok(t)
-				},
-				b'0'..=b'9' =>
-				{
-					let base = pos;
-					let radix = if self.data[pos] == b'0' && pos + 1 < self.data.len()
+					let mut t = self.0.clone();
+					match t.next()
 					{
-						pos += 1;
-						if self.data[pos] == b'x'
+						None => return Some(Ok(start.positioned(TokenValue::Divide))),
+						Some(Ok(c)) if c == '/' =>
 						{
-							pos += 1;
-							16
-						}
-						else if self.data[pos] == b'b'
-						{
-							pos += 1;
-							2
-						}
-						else {8}
-					}
-					else {10};
-					let start = pos;
-					
-					while pos < self.data.len()
-					{
-						if !(self.data[pos] as char).is_digit(radix) {break;}
-						pos += 1;
-					}
-					// SAFETY: digits are a subset of alphanumerics
-					let text = unsafe{core::str::from_utf8_unchecked(&self.data[start..pos])};
-					if text.is_empty() && radix == 8
-					{
-						assert_eq!(pos - base, 1); // only a zero (assumed octal)
-						self.data = &self.data[pos..];
-						let t = Token{value: TokenValue::Number(Number::Integer(0)), line: self.line, col: self.col};
-						self.col = self.col.saturating_add(1);
-						Ok(t)
-					}
-					else
-					{
-						match i64::from_str_radix(text, radix)
-						{
-							Ok(v) =>
+							match consume_line_comment(&mut t)
 							{
-								self.data = &self.data[pos..];
-								let t = Token{value: TokenValue::Number(Number::Integer(v)), line: self.line, col: self.col};
-								self.advance(0, pos - base);
-								Ok(t)
+								Ok(..) => self.0 = t,
+								Err(e) =>
+								{
+									self.0 = t;
+									return Some(Err(e));
+								},
+							}
+						},
+						Some(Ok(c)) if c == '*' =>
+						{
+							match consume_block_comment(&mut t, start.line(), start.column())
+							{
+								Ok(..) => self.0 = t,
+								Err(e) =>
+								{
+									self.0 = t;
+									return Some(Err(e));
+								},
+							}
+						},
+						Some(Ok(..)) => return Some(Ok(start.positioned(TokenValue::Divide))),
+						Some(Err(e)) =>
+						{
+							self.0 = t;
+							return Some(Err(e));
+						},
+					}
+				},
+				',' => return Some(Ok(start.positioned(TokenValue::Separator))),
+				';' => return Some(Ok(start.positioned(TokenValue::Terminator))),
+				':' => return Some(Ok(start.positioned(TokenValue::LabelMark))),
+				'.' => return Some(Ok(start.positioned(TokenValue::DirectiveMark))),
+				'+' => return Some(Ok(start.positioned(TokenValue::Add))),
+				'-' => return Some(Ok(start.positioned(TokenValue::Subtract))),
+				'*' => return Some(Ok(start.positioned(TokenValue::Multiply))),
+				'!' => return Some(Ok(start.positioned(TokenValue::Not))),
+				'&' => return Some(Ok(start.positioned(TokenValue::And))),
+				'|' => return Some(Ok(start.positioned(TokenValue::Or))),
+				'^' => return Some(Ok(start.positioned(TokenValue::ExclusiveOr))),
+				'<' | '>' =>
+				{
+					let mut t = self.0.clone();
+					match t.next()
+					{
+						Some(Ok(c)) =>
+						{
+							self.0 = t;
+							return Some(Ok(start.positioned(if c == '<' {TokenValue::LeftShift} else {TokenValue::RightShift})));
+						},
+						Some(Err(e)) =>
+						{
+							self.0 = t;
+							return Some(Err(e));
+						},
+						_ =>
+						{
+							self.0.clear();
+							return Some(Err(start.positioned(TokenErrorKind::Unexpected(c))));
+						}
+					}
+				},
+				'0'..='9' =>
+				{
+					let (radix, num_start) = if c == '0'
+					{
+						let mut t = self.0.clone();
+						match t.next()
+						{
+							None => (10, start.clone()),
+							Some(Ok(c)) =>
+							{
+								if c == 'x' {(16, t)}
+								else if c == 'b' {(2, t)}
+								else if c.is_digit(8) {(8, self.0.clone())}
+								else {(10, start.clone())}
 							},
-							Err(..) =>
+							Some(Err(e)) =>
 							{
-								self.data = b"";
-								Err(TokenError{value: TokenErrorKind::BadNumber, line: self.line, col: self.col})
+								self.0 = t;
+								return Some(Err(e));
 							},
 						}
 					}
-				},
-				b'\'' =>
-				{
-					let base = pos;
-					pos += 1;
-					let mut result: Option<char> = None;
-					while pos < self.data.len()
+					else {(10, start.clone())};
+					let mut num_end = num_start.clone();
+					self.0 = num_start.clone();
+					while let Some(curr) = self.0.next()
 					{
-						let c = self.data[pos];
-						if c == b'\''
+						match curr
 						{
-							match result
-							{
-								None => break,
-								Some(v) =>
-								{
-									pos += 1;
-									self.data = &self.data[pos..];
-									let t = Token{value: TokenValue::Number(Number::Integer(u32::from(v).into())), line: self.line, col: self.col};
-									self.advance(0, pos - base);
-									return Some(Ok(t));
-								},
-							}
-						}
-						if result.is_some() {break;}
-						if c == b'\\'
-						{
-							pos += 1;
-							if pos >= self.data.len() {break;}
-							result = match c
-							{
-								b't' => Some('\t'),
-								b'n' => Some('\n'),
-								b'r' => Some('\r'),
-								b'"' | b'\'' | b'\\' => Some(char::try_from(c).unwrap()),
-								_ => break,
-							};
-						}
-						else if c == b'\t' || (c >= b' ' && c <= b'~')
-						{
-							result = Some(char::try_from(c).unwrap());
-						}
-						else if c >= 0x80
-						{
-							let n = if c >= 0xF0 {4} else if c >= 0xE0 {3} else {2};
-							if self.data.len() - pos < n {break;}
-							match core::str::from_utf8(&self.data[pos..pos + n])
-							{
-								Ok(s) => result = Some(s.chars().next().unwrap()),
-								Err(..) =>
-								{
-									self.data = b"";
-									self.advance(0, pos - base);
-									return Some(Err(TokenError{value: TokenErrorKind::Invalid, line: self.line, col: self.col}));
-								},
-							}
-						}
-						else
-						{
-							self.data = b"";
-							self.advance(0, pos - base);
-							return Some(Err(TokenError{value: TokenErrorKind::Invalid, line: self.line, col: self.col}));
-						}
-						pos += 1;
-					}
-					self.data = b"";
-					Err(TokenError{value: TokenErrorKind::BadCharacter, line: self.line, col: self.col})
-				},
-				b'A'..=b'Z' | b'_' | b'a'..=b'z' =>
-				{
-					let base = pos;
-					pos += 1;
-					while pos < self.data.len()
-					{
-						match self.data[pos]
-						{
-							// FIXME including '.' to simplify .W and .N (but that should be part of the parser)
-							b'$' | b'.' | b'0'..=b'9' | b'@' | b'A'..=b'Z' | b'_' | b'a'..=b'z' => pos += 1,
-							_ => break,
+							Ok(c) if c.is_digit(radix) => num_end = self.0.clone(),
+							Ok(..) => break,
+							Err(e) => return Some(Err(e)),
 						}
 					}
-					// SAFETY: checked to be ASCII by matcher
-					let val = unsafe{core::str::from_utf8_unchecked(&self.data[base..pos])};
-					self.data = &self.data[pos..];
-					let t = Token{value: TokenValue::Identifier(val), line: self.line, col: self.col};
-					self.advance(0, pos - base);
-					Ok(t)
+					let text = num_end.since(&num_start);
+					return Some(match i64::from_str_radix(text, radix)
+					{
+						Ok(v) =>
+						{
+							self.0 = num_end;
+							Ok(start.positioned(TokenValue::Number(Number::Integer(v))))
+						},
+						Err(..) =>
+						{
+							self.0.clear();
+							Err(start.positioned(TokenErrorKind::BadNumber))
+						},
+					});
 				},
-				b'(' =>
+				'\'' =>
 				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::BeginGroup, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
+					let mut end = self.0.clone();
+					let c = match end.next()
+					{
+						None | Some(Ok('\'')) =>
+						{
+							self.0.clear();
+							return Some(Err(start.positioned(TokenErrorKind::BadCharacter)));
+						},
+						Some(Ok('\\')) =>
+						{
+							match end.next()
+							{
+								Some(Ok('t')) => '\t',
+								Some(Ok('n')) => '\n',
+								Some(Ok('r')) => '\r',
+								Some(Ok(c @ ('"' | '\'' | '\\'))) => c,
+								None | Some(Ok(..)) =>
+								{
+									self.0.clear();
+									return Some(Err(start.positioned(TokenErrorKind::BadCharacter)));
+								},
+								Some(Err(e)) =>
+								{
+									self.0 = end;
+									return Some(Err(e));
+								},
+							}
+						},
+						Some(Ok(c)) => c,
+						Some(Err(e)) =>
+						{
+							self.0 = end;
+							return Some(Err(e));
+						},
+					};
+					match end.next()
+					{
+						Some(Ok('\'')) =>
+						{
+							self.0 = end;
+							return Some(Ok(start.positioned(TokenValue::Number(Number::Integer(u32::from(c).into())))));
+						},
+						None | Some(Ok(..)) =>
+						{
+							self.0.clear();
+							return Some(Err(start.positioned(TokenErrorKind::BadCharacter)));
+						},
+						Some(Err(e)) =>
+						{
+							self.0 = end;
+							return Some(Err(e));
+						},
+					}
 				},
-				b')' =>
+				'A'..='Z' | '_' | 'a'..='z' =>
 				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::EndGroup, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
+					let mut end = self.0.clone();
+					let mut prev = end.clone();
+					while let Some(curr) = end.next()
+					{
+						match curr
+						{
+							Ok('$' | '.' | '0'..='9' | '@' | 'A'..='Z' | '_' | 'a'..='z') => prev = end.clone(),
+							Ok(..) => break,
+							Err(e) =>
+							{
+								self.0 = end;
+								return Some(Err(e));
+							},
+						}
+					}
+					let val = prev.since(&mut start);
+					self.0 = prev;
+					return Some(Ok(start.positioned(TokenValue::Identifier(val))));
 				},
-				b'[' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::BeginAddr, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b']' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::EndAddr, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'{' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::BeginSeq, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
-				b'}' =>
-				{
-					self.data = &self.data[pos + 1..];
-					let t = Token{value: TokenValue::EndSeq, line: self.line, col: self.col};
-					self.col = self.col.saturating_add(1);
-					Ok(t)
-				},
+				'(' => return Some(Ok(start.positioned(TokenValue::BeginGroup))),
+				')' => return Some(Ok(start.positioned(TokenValue::EndGroup))),
+				'[' => return Some(Ok(start.positioned(TokenValue::BeginAddr))),
+				']' => return Some(Ok(start.positioned(TokenValue::EndAddr))),
+				'{' => return Some(Ok(start.positioned(TokenValue::BeginSeq))),
+				'}' => return Some(Ok(start.positioned(TokenValue::EndSeq))),
 				c =>
 				{
-					self.data = b"";
-					Err(TokenError{value: TokenErrorKind::Unexpected(c as char), line: self.line, col: self.col})
+					self.0.clear();
+					return Some(Err(start.positioned(TokenErrorKind::Unexpected(c))));
 				},
-			});
+			}
+			start = self.0.clone();
 		}
 		None
 	}
