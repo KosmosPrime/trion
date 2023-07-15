@@ -1,6 +1,7 @@
 use core::fmt;
 use std::error::Error;
 
+pub mod matcher;
 pub mod parse;
 pub mod token;
 

@@ -538,6 +538,7 @@ pub type TokenError = Positioned<TokenErrorKind>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenErrorKind
 {
+	BadUnicode,
 	Invalid,
 	BlockComment,
 	BadNumber,
@@ -551,6 +552,7 @@ impl fmt::Display for TokenErrorKind
 	{
 		match self
 		{
+			TokenErrorKind::BadUnicode => f.write_str("malformed UTF-8 code-point"),
 			TokenErrorKind::Invalid => f.write_str("invalid character"),
 			TokenErrorKind::BlockComment => f.write_str("unclosed block comment"),
 			TokenErrorKind::BadNumber => f.write_str("malformed number"),
