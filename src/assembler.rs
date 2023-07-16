@@ -239,6 +239,33 @@ pub fn assemble(buff: &mut Vec<u8>) -> bool
 						}
 						output.extend_from_slice(val.as_ref());
 					},
+					"dstr" =>
+					{
+						if args.len() != 1
+						{
+							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
+							return false;
+						}
+						let val = match args[0]
+						{
+							Argument::String(ref val) => val.as_ref().as_bytes(),
+							_ =>
+							{
+								eprintln!("invalid data value ({}:{})", element.line, element.col);
+								return false;
+							},
+						};
+						match u32::try_from(val.len())
+						{
+							Ok(n) if n <= u32::MAX - image_addr => image_addr += n,
+							_ =>
+							{
+								eprintln!("hex blob too long ({}:{})", element.line, element.col);
+								return false;
+							},
+						}
+						output.extend_from_slice(val);
+					},
 					_ =>
 					{
 						eprintln!("unknown directive {name:?} ({}:{})", element.line, element.col);
