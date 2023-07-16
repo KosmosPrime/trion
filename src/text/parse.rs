@@ -1,5 +1,6 @@
 use core::fmt;
 use core::iter::FusedIterator;
+use std::borrow::Cow;
 use std::error::Error;
 
 use crate::text::Positioned;
@@ -11,6 +12,7 @@ pub enum Argument<'l>
 {
 	Constant(Number),
 	Identifier(&'l str),
+	String(Cow<'l, str>),
 	Add(Vec<Argument<'l>>),
 	Subtract(Vec<Argument<'l>>),
 	Multiply(Vec<Argument<'l>>),
@@ -168,6 +170,11 @@ impl<'l> Parser<'l>
 					args.push(Argument::Identifier(ident));
 					// TODO parse expressions
 				},
+				TokenValue::String(val) =>
+				{
+					args.push(Argument::String(val));
+					// TODO parse expressions
+				},
 				TokenValue::BeginAddr =>
 				{
 					curr = self.next_inner("<expression>")?;
@@ -219,6 +226,7 @@ impl<'l> Parser<'l>
 							{
 								TokenValue::Number(val) => seq.push(Argument::Constant(val)),
 								TokenValue::Identifier(ident) => seq.push(Argument::Identifier(ident)),
+								TokenValue::String(val) => seq.push(Argument::String(val)),
 								_ => return Err(Self::expect("<expression>", curr)),
 							}
 							curr = self.next_inner("'}'")?;

@@ -1,4 +1,5 @@
 use core::fmt;
+use std::borrow::Cow;
 use std::error::Error;
 
 use crate::text::Positioned;
@@ -12,7 +13,7 @@ pub enum Number
 
 pub type Token<'l> = Positioned<TokenValue<'l>>;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum TokenValue<'l>
 {
 	Separator, Terminator,
@@ -21,7 +22,7 @@ pub enum TokenValue<'l>
 	Not, And, Or, ExclusiveOr, LeftShift, RightShift,
 	Number(Number),
 	Identifier(&'l str),
-	// TODO implement String(Cow<'l, str>),
+	String(Cow<'l, str>),
 	// TODO implement ByteString(Cow<'l, [u8]>),
 	BeginGroup, EndGroup,
 	BeginAddr, EndAddr,
@@ -50,6 +51,7 @@ impl<'l> TokenValue<'l>
 			TokenValue::RightShift => "\">>\"",
 			TokenValue::Number(..) => "number",
 			TokenValue::Identifier(..) => "identifier",
+			TokenValue::String(..) => "string",
 			TokenValue::BeginGroup => "'('",
 			TokenValue::EndGroup => "')'",
 			TokenValue::BeginAddr => "'['",
@@ -342,6 +344,105 @@ impl<'l> Tokenizer<'l>
 					self.0 = prev;
 					return Some(Ok(start.positioned(TokenValue::Identifier(val))));
 				},
+				'"' =>
+				{
+					let mut owned: Option<String> = None;
+					let mut prev = self.0.clone();
+					while let Some(curr) = self.0.next()
+					{
+						let c = match curr
+						{
+							Ok(c) => c,
+							Err(e) => return Some(Err(e)),
+						};
+						if c == '"'
+						{
+							match owned
+							{
+								None =>
+								{
+									let all = self.0.since(&prev); // contains the trailing '"'
+									return Some(Ok(start.positioned(TokenValue::String(Cow::Borrowed(&all[..all.len() - 1])))));
+								},
+								Some(mut data) =>
+								{
+									let rest = self.0.since(&prev); // contains the trailing '"'
+									data.push_str(&rest[..rest.len() - 1]);
+									return Some(Ok(start.positioned(TokenValue::String(Cow::Owned(data)))));
+								},
+							}
+						}
+						else if c == '\\'
+						{
+							let str_ref = owned.get_or_insert_with(String::new);
+							let prev_str = self.0.since(&prev); // contains the trailing '\\'
+							if prev_str.len() > 1 {str_ref.push_str(&prev_str[..prev_str.len() - 1]);}
+							match self.0.next()
+							{
+								Some(Ok('0')) => str_ref.push('\0'),
+								Some(Ok('t')) => str_ref.push('\t'),
+								Some(Ok('n')) => str_ref.push('\n'),
+								Some(Ok('r')) => str_ref.push('\r'),
+								Some(Ok(c @ ('"' | '\'' | '\\'))) => str_ref.push(c),
+								Some(Ok('u')) =>
+								{
+									match self.0.next()
+									{
+										Some(Ok('{')) => (),
+										Some(Err(e)) => return Some(Err(e)),
+										None | Some(Ok(..)) =>
+										{
+											self.0 = start;
+											return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
+										},
+									}
+									let uni_start = self.0.clone();
+									loop
+									{
+										match self.0.next()
+										{
+											Some(Ok('0'..='9' | 'A'..='F' | 'a'..='f')) => (),
+											Some(Ok('}')) => break,
+											Some(Err(e)) => return Some(Err(e)),
+											None | Some(Ok(..)) =>
+											{
+												self.0 = start;
+												return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
+											},
+										}
+									}
+									let uni_esc = self.0.since(&uni_start); // contains the trailing '}'
+									match u32::from_str_radix(&uni_esc[..uni_esc.len() - 1], 16)
+									{
+										Ok(v) =>
+										{
+											if let Some(c) = char::from_u32(v) {str_ref.push(c);}
+											else
+											{
+												self.0 = start;
+												return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
+											}
+										},
+										_ =>
+										{
+											self.0 = start;
+											return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
+										},
+									}
+								},
+								None | Some(Ok(..)) =>
+								{
+									self.0 = start;
+									return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
+								},
+								Some(Err(e)) => return Some(Err(e)),
+							}
+							prev = self.0.clone();
+						}
+					}
+					self.0 = start;
+					return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
+				},
 				'(' => return Some(Ok(start.positioned(TokenValue::BeginGroup))),
 				')' => return Some(Ok(start.positioned(TokenValue::EndGroup))),
 				'[' => return Some(Ok(start.positioned(TokenValue::BeginAddr))),
@@ -380,6 +481,7 @@ pub enum TokenErrorKind
 	BlockComment,
 	BadNumber,
 	BadCharacter,
+	BadString,
 	Unexpected(char),
 }
 
@@ -394,6 +496,7 @@ impl fmt::Display for TokenErrorKind
 			TokenErrorKind::BlockComment => f.write_str("unclosed block comment"),
 			TokenErrorKind::BadNumber => f.write_str("malformed number"),
 			TokenErrorKind::BadCharacter => f.write_str("malformed character literal"),
+			TokenErrorKind::BadString => f.write_str("malformed string literal"),
 			TokenErrorKind::Unexpected(c) => write!(f, "unexpected character {c:?}"),
 		}
 	}
@@ -521,6 +624,17 @@ mod test
 		expect!(t, Positioned{value: TokenValue::EndAddr, ..}, {});
 		expect!(t, Positioned{value: TokenValue::BeginSeq, ..}, {});
 		expect!(t, Positioned{value: TokenValue::EndSeq, ..}, {});
+		assert!(t.next().is_none());
+	}
+	
+	#[test]
+	fn strings()
+	{
+		let mut t = Tokenizer::new(r#" ""  "hello world" "\0\r\n" "a\u{62}c" "#.as_bytes());
+		expect!(t, Positioned{value: TokenValue::String(s), ..}, {assert_eq!(s.as_ref(), "")});
+		expect!(t, Positioned{value: TokenValue::String(s), ..}, {assert_eq!(s.as_ref(), "hello world")});
+		expect!(t, Positioned{value: TokenValue::String(s), ..}, {assert_eq!(s.as_ref(), "\0\r\n")});
+		expect!(t, Positioned{value: TokenValue::String(s), ..}, {assert_eq!(s.as_ref(), "abc")});
 		assert!(t.next().is_none());
 	}
 	
