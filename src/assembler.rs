@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::path::Path;
 
 use crate::arm6m::asm::{ImmReg, Instruction};
 use crate::arm6m::cond::Condition;
@@ -22,8 +25,9 @@ fn print_err_trace(msg: &str, err: impl Error)
 	}
 }
 
-pub fn assemble(buff: &mut Vec<u8>) -> bool
+pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 {
+	let base = path.parent().unwrap();
 	const BASE: u32 = 0x20000000; // FIXME remove this, should use an initial .addr
 	let mut output = Vec::new();
 	let mut image_addr: u32 = BASE;
@@ -265,6 +269,73 @@ pub fn assemble(buff: &mut Vec<u8>) -> bool
 							},
 						}
 						output.extend_from_slice(val);
+					},
+					"dfile" =>
+					{
+						if args.len() != 1
+						{
+							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
+							return false;
+						}
+						let path = match args[0]
+						{
+							Argument::String(ref val) =>
+							{
+								let mut tmp = base.to_path_buf();
+								tmp.push(val.as_ref());
+								tmp
+							},
+							_ =>
+							{
+								eprintln!("invalid path value ({}:{})", element.line, element.col);
+								return false;
+							},
+						};
+						match OpenOptions::new().read(true).open(path)
+						{
+							Ok(mut f) =>
+							{
+								let len = match f.metadata()
+								{
+									Ok(meta) =>
+									{
+										if meta.len() > (u32::MAX - image_addr) as u64 || usize::try_from(meta.len()).is_err()
+										{
+											eprintln!("file too long ({}:{})", element.line, element.col);
+											return false;
+										}
+										// `meta.len()` fits into an u32 because of the first comparison
+										meta.len() as u32
+									},
+									Err(e) =>
+									{
+										eprintln!("could not access file metadata ({}:{})", element.line, element.col);
+										print_err_trace("file access error", e);
+										return false;
+									},
+								};
+								match f.read_to_end(&mut output)
+								{
+									Ok(n) =>
+									{
+										assert_eq!(n, usize::try_from(len).unwrap());
+										image_addr += len;
+									},
+									Err(e) =>
+									{
+										eprintln!("could not read file ({}:{})", element.line, element.col);
+										print_err_trace("file access error", e);
+										return false;
+									},
+								}
+							},
+							Err(e) =>
+							{
+								eprintln!("could not open file ({}:{})", element.line, element.col);
+								print_err_trace("file access error", e);
+								return false;
+							},
+						}
 					},
 					_ =>
 					{

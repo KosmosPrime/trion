@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::path::Path;
 
 use crate::arm6m::asm::{Instruction, ImmReg};
 use crate::arm6m::cond::Condition;
@@ -32,11 +33,12 @@ pub fn main()
 				};
 				let out_arg = args.next();
 				
+				let path = Path::new(&fip);
 				let mut buff = Vec::new();
-				let mut fi = OpenOptions::new().read(true).open(fip).unwrap();
+				let mut fi = OpenOptions::new().read(true).open(path).unwrap();
 				fi.read_to_end(&mut buff).unwrap();
 				drop(fi);
-				if assembler::assemble(&mut buff)
+				if assembler::assemble(&mut buff, path)
 				{
 					if let Some(fop) = out_arg
 					{
