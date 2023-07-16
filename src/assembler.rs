@@ -177,6 +177,68 @@ pub fn assemble(buff: &mut Vec<u8>) -> bool
 							_ => unreachable!(),
 						}
 					},
+					"dhex" =>
+					{
+						if args.len() != 1
+						{
+							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
+							return false;
+						}
+						let val = match args[0]
+						{
+							Argument::String(ref in_hex) =>
+							{
+								let mut out_data = Vec::new();
+								let mut carry: Option<u8> = None;
+								for c in in_hex.as_ref().chars().filter(|&c| !c.is_ascii_whitespace())
+								{
+									match c.to_digit(16)
+									{
+										None =>
+										{
+											eprintln!("in {in_hex:?} {carry:?} {c:?}");
+											eprintln!("malformed hex string ({}:{})", element.line, element.col);
+											return false;
+										},
+										Some(v) =>
+										{
+											let v = v as u8;
+											match carry
+											{
+												None => carry = Some(v << 4),
+												Some(c) =>
+												{
+													out_data.push(v | c);
+													carry = None;
+												},
+											}
+										},
+									}
+								}
+								if carry.is_some()
+								{
+									eprintln!("malformed hex string ({}:{})", element.line, element.col);
+									return false;
+								}
+								out_data
+							},
+							_ =>
+							{
+								eprintln!("invalid data value ({}:{})", element.line, element.col);
+								return false;
+							},
+						};
+						match u32::try_from(val.len())
+						{
+							Ok(n) if n <= u32::MAX - image_addr => image_addr += n,
+							_ =>
+							{
+								eprintln!("hex blob too long ({}:{})", element.line, element.col);
+								return false;
+							},
+						}
+						output.extend_from_slice(val.as_ref());
+					},
 					_ =>
 					{
 						eprintln!("unknown directive {name:?} ({}:{})", element.line, element.col);
