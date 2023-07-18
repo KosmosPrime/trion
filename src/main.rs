@@ -8,6 +8,7 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 
 pub mod arm6m;
+pub mod asm;
 mod assembler;
 mod disassembler;
 pub(crate) mod macros;
