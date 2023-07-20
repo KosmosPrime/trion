@@ -11,7 +11,7 @@ use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
 use crate::text::parse::{Argument, ElementValue, Parser};
 use crate::text::token::Number;
-use crate::uf2::codec::encode;
+use crate::uf2::write::Uf2Write;
 use crate::uf2::crc::Crc;
 
 fn print_err_trace(msg: &str, err: impl Error)
@@ -931,7 +931,9 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 		output[0xFC..0x100].copy_from_slice(&u32::to_le_bytes(crc.get_value()));
 		
 		buff.clear();
-		encode(output.as_ref(), buff, BASE, Some(0xE48BFF56)).unwrap();
+		let mut dst = Uf2Write::new_vec(Some(0xE48BFF56), 256, 256, buff).unwrap();
+		dst.write_all(BASE, output.as_ref(), false).unwrap();
+		drop(dst);
 		true
 	}
 	else {false}
