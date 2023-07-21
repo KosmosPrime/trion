@@ -107,13 +107,10 @@ impl MemoryMap
 			// compute the last index involved in a merge (`None` if no merging)
 			let idx_last = match self.locate(addr_last.saturating_add(1), Search::Below)
 			{
-				None =>
-				{
-					if self.parts.is_empty() || self.parts[0].range.first - 1 > addr_last {None} else {Some(0)}
-				},
+				None => None,
 				Some(idx) =>
 				{
-					if self.parts[idx].range.last >= addr {Some(idx)} else {None}
+					if self.parts[idx].range.last >= addr.saturating_sub(1) {Some(idx)} else {None}
 				},
 			};
 			
@@ -596,6 +593,47 @@ mod test
 		assert_eq!(map.put(106, b"world "), Ok(3));
 		assert_eq!(map.len(), 1);
 		assert_eq!(map.iter().next(), Some((MemoryRange{first: 100, last: 111}, b"hello world ".as_ref())));
+		
+		let mut map = MemoryMap::new();
+		assert_eq!(map.put(98, b"0"), Ok(1));
+		assert_eq!(map.put(106, b"1"), Ok(1));
+		assert_eq!(map.len(), 2);
+		assert_eq!(map.put(101, b"s"), Ok(1));
+		assert_eq!(map.put(103, b"f"), Ok(1));
+		assert_eq!(map.len(), 4);
+		let mut iter = map.iter();
+		assert_eq!(iter.next(), Some((MemoryRange{first: 98, last: 98}, b"0".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 101, last: 101}, b"s".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 103, last: 103}, b"f".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 106, last: 106}, b"1".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.put(100, b"a"), Ok(1));
+		assert_eq!(map.len(), 4);
+		let mut iter = map.iter();
+		assert_eq!(iter.next(), Some((MemoryRange{first: 98, last: 98}, b"0".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 101}, b"as".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 103, last: 103}, b"f".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 106, last: 106}, b"1".as_ref())));
+		assert_eq!(iter.next(), None);
+		
+		println!("{map:?}");
+		assert_eq!(map.put(104, b"g"), Ok(1));
+		println!("{map:?}");
+		assert_eq!(map.len(), 4);
+		let mut iter = map.iter();
+		assert_eq!(iter.next(), Some((MemoryRange{first: 98, last: 98}, b"0".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 101}, b"as".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 103, last: 104}, b"fg".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 106, last: 106}, b"1".as_ref())));
+		assert_eq!(iter.next(), None);
+		
+		assert_eq!(map.put(102, b"d"), Ok(1));
+		assert_eq!(map.len(), 3);
+		let mut iter = map.iter();
+		assert_eq!(iter.next(), Some((MemoryRange{first: 98, last: 98}, b"0".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 104}, b"asdfg".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 106, last: 106}, b"1".as_ref())));
+		assert_eq!(iter.next(), None);
 	}
 	
 	#[test]
