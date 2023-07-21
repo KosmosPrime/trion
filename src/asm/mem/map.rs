@@ -12,6 +12,12 @@ struct MemorySegment
 	data: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Search
+{
+	Exact, Below, Above,
+}
+
 #[derive(Clone, Debug)]
 pub struct MemoryMap
 {
@@ -30,7 +36,7 @@ impl MemoryMap
 		self.parts.len()
 	}
 	
-	fn locate(&self, addr: u32, below: bool) -> Option<usize>
+	fn locate(&self, addr: u32, search: Search) -> Option<usize>
 	{
 		if self.parts.is_empty() {return None;}
 		let mut first = 0;
@@ -43,7 +49,12 @@ impl MemoryMap
 			{
 				if mid == first
 				{
-					return if below && first > 0 {Some(first - 1)} else {None};
+					return match search
+					{
+						Search::Exact => None,
+						Search::Below => if first > 0 {Some(first - 1)} else {None},
+						Search::Above => Some(first),
+					};
 				}
 				debug_assert!(mid > first);
 				last = mid - 1;
@@ -52,7 +63,12 @@ impl MemoryMap
 			{
 				if mid == last
 				{
-					return if below {Some(last)} else {None};
+					return match search
+					{
+						Search::Exact => None,
+						Search::Below => Some(last),
+						Search::Above => if last < self.parts.len() - 1 {Some(last + 1)} else {None},
+					};
 				}
 				debug_assert!(mid < last);
 				first = mid + 1;
@@ -63,12 +79,12 @@ impl MemoryMap
 	
 	pub fn get(&self, addr: u32) -> Option<&[u8]>
 	{
-		self.locate(addr, false).map(|i| &self.parts[i]).map(|p| &p.data[(addr - p.range.first) as usize..])
+		self.locate(addr, Search::Exact).map(|i| &self.parts[i]).map(|p| &p.data[(addr - p.range.first) as usize..])
 	}
 	
 	pub fn get_mut(&mut self, addr: u32) -> Option<&mut [u8]>
 	{
-		self.locate(addr, false).map(|i| &mut self.parts[i]).map(|p| &mut p.data[(addr - p.range.first) as usize..])
+		self.locate(addr, Search::Exact).map(|i| &mut self.parts[i]).map(|p| &mut p.data[(addr - p.range.first) as usize..])
 	}
 	
 	pub fn put(&mut self, addr: u32, data: &[u8]) -> Result<usize, PutError>
@@ -83,16 +99,13 @@ impl MemoryMap
 			let addr_last = addr + (data.len() - 1) as u32;
 			
 			// compute the index of the final segment (and the first one involved in a merge)
-			let idx_first = match self.locate(addr, true)
+			let idx_first = match self.locate(addr.saturating_sub(1), Search::Above)
 			{
-				None => 0,
-				Some(idx) =>
-				{
-					if self.parts[idx].range.last.saturating_add(1) < addr {idx + 1} else {idx}
-				},
+				None => self.parts.len(),
+				Some(idx) => idx,
 			};
 			// compute the last index involved in a merge (`None` if no merging)
-			let idx_last = match self.locate(addr_last.saturating_add(1), true)
+			let idx_last = match self.locate(addr_last.saturating_add(1), Search::Below)
 			{
 				None =>
 				{
@@ -193,14 +206,60 @@ impl MemoryMap
 		else {Ok(0)}
 	}
 	
+	pub fn count(&self) -> (u32, usize)
+	{
+		let mut addrs = 0;
+		for seg in self.parts.iter()
+		{
+			// off by one but cannot overflow (we compensate afterwards)
+			addrs += seg.range.last - seg.range.first;
+		}
+		// `self.parts.len() <= 1 << (u32::BITS - 1)` otherwise segments would get merged
+		addrs = addrs.saturating_add(self.parts.len() as u32);
+		(addrs, self.parts.len())
+	}
+	
 	pub fn iter<'s>(&'s self) -> Iter<'s>
 	{
 		Iter(self.parts.iter())
 	}
 	
+	pub fn count_range(&self, range: MemoryRange) -> (u32, usize)
+	{
+		let first = match self.locate(range.first, Search::Above)
+		{
+			None => self.parts.len(),
+			Some(idx) => idx,
+		};
+		let mut addrs = 0;
+		let mut cnt = 0;
+		for seg in self.parts[first..].iter().filter(|seg| seg.range.first <= range.last)
+		{
+			debug_assert!(seg.range.last >= range.first);
+			let min_addr = seg.range.first.max(range.first);
+			let max_addr = seg.range.last.min(range.last);
+			// off by one, see `Self::count`
+			addrs += max_addr - min_addr;
+			cnt += 1;
+		}
+		// safe for the same reason as in `Self::count`
+		addrs = addrs.saturating_add(cnt as u32);
+		(addrs, cnt)
+	}
+	
+	pub fn iter_range<'s>(&'s self, range: MemoryRange) -> RangeIter<'s>
+	{
+		let first = match self.locate(range.first, Search::Above)
+		{
+			None => self.parts.len(),
+			Some(idx) => idx,
+		};
+		RangeIter{base: self, next: first, range}
+	}
+	
 	pub fn remove(&mut self, addr: u32) -> Option<(MemoryRange, Vec<u8>)>
 	{
-		match self.locate(addr, false)
+		match self.locate(addr, Search::Exact)
 		{
 			None => None,
 			Some(idx) =>
@@ -213,63 +272,68 @@ impl MemoryMap
 	
 	pub fn remove_range(&mut self, range: MemoryRange)
 	{
-		match self.locate(range.last, true)
+		match self.locate(range.first, Search::Above)
 		{
-			Some(mut last_idx) if self.parts[last_idx].range.last >= range.first =>
+			Some(first_idx) if self.parts[first_idx].range.last >= range.first =>
 			{
-				let last = &mut self.parts[last_idx];
-				if range.first <= last.range.first
+				let first = &mut self.parts[first_idx];
+				if range.first > first.range.first && range.last < first.range.last
 				{
-					if range.last >= last.range.last
-					{
-						// range contains this entire segment
-						last_idx += 1; // mark for removal
-					}
-					else
-					{
-						// range is a prefix of this segment
-						let offset = usize::try_from(range.last - last.range.first).unwrap();
-						last.range.first = range.last + 1;
-						last.data.drain(..=offset);
-					}
+					// only one segment is affected, but we have to split it into 2
+					// both casts are fine as the values are smaller than `first.data.len()`
+					let start_off = (range.first - first.range.first) as usize;
+					let end_off = (first.range.last - range.last) as usize;
 					
-					let mut first_idx = last_idx;
-					while first_idx > 0 && self.parts[first_idx - 1].range.first >= range.first
-					{
-						first_idx -= 1;
-					}
-					if first_idx > 0 && self.parts[first_idx - 1].range.last >= range.first
-					{
-						// won't get removed but truncated
-						let first = &mut self.parts[first_idx - 1];
-						let remain = usize::try_from(range.first - first.range.first).unwrap();
-						first.range.last = range.first - 1;
-						first.data.truncate(remain);
-					}
-					self.parts.drain(first_idx..last_idx);
+					let end_range = MemoryRange{first: range.last + 1, last: first.range.last};
+					let end_data = first.data[first.data.len() - end_off..].to_owned();
+					first.range.last = range.first - 1;
+					first.data.truncate(start_off);
+					self.parts.insert(first_idx + 1, MemorySegment{range: end_range, data: end_data});
 				}
 				else
 				{
-					let before_len = usize::try_from(range.first - last.range.first).unwrap();
-					if range.last >= last.range.last
+					let remove_first = if range.first <= first.range.first
 					{
-						// range is a suffix of this segment
-						last.range.last = range.first - 1;
-						last.data.truncate(before_len);
+						if range.last < first.range.last
+						{
+							// cut from the beginning
+							first.data.drain(..(range.last + 1 - first.range.first) as usize);
+							first.range.first = range.last + 1;
+							false
+						}
+						else {true}
 					}
 					else
 					{
-						// range is contained within this segment, splitting it in two
-						let after_len = usize::try_from(last.range.last - range.last).unwrap();
-						let after_data = last.data[last.data.len() - after_len..].to_owned();
-						let after = MemorySegment{range: MemoryRange{first: range.last + 1, last: last.range.last}, data: after_data};
-						last.range.first = range.first - 1;
-						last.data.truncate(before_len);
-						self.parts.insert(last_idx + 1, after);
+						// no overflow because `range.first <= first.range.last` (from locate)
+						first.data.truncate((range.first - first.range.first) as usize);
+						first.range.last = range.first - 1;
+						false // never drop because `range.first > first.range.first`
+					};
+					
+					// we know that something exists not after `range.last` so this must exist too
+					let last_idx = self.locate(range.last, Search::Below).unwrap();
+					if last_idx > first_idx
+					{
+						let last = &mut self.parts[last_idx];
+						// we know `range.first < last.range.last` because `range.first <= first.range.last` (from locate)
+						let remove_last = if range.last < last.range.last
+						{
+							// cut from the beginning
+							last.data.drain(..(range.last + 1 - last.range.first) as usize);
+							last.range.first = range.last + 1;
+							false
+						}
+						else {true};
+						self.parts.drain(first_idx + (!remove_first) as usize..last_idx + remove_last as usize);
+					}
+					else
+					{
+						if remove_first {self.parts.remove(first_idx);}
 					}
 				}
 			},
-			_ => (),
+			_ => return,
 		}
 	}
 	
@@ -313,6 +377,54 @@ impl<'l> Iterator for Iter<'l>
 
 impl<'l> FusedIterator for Iter<'l> where SliceIter<'l, MemorySegment>: FusedIterator {}
 
+#[derive(Clone, Debug)]
+pub struct RangeIter<'l>
+{
+	base: &'l MemoryMap,
+	next: usize,
+	range: MemoryRange,
+}
+
+impl<'l> RangeIter<'l>
+{
+	pub fn range(&self) -> MemoryRange
+	{
+		self.range
+	}
+}
+
+impl<'l> Iterator for RangeIter<'l>
+{
+	type Item = (MemoryRange, &'l [u8]);
+	
+	fn next(&mut self) -> Option<Self::Item>
+	{
+		match self.base.parts.get(self.next)
+		{
+			None => None,
+			Some(seg) =>
+			{
+				if seg.range.first <= self.range.last
+				{
+					self.next += 1;
+					let (start_off, first_addr) = if self.range.first <= seg.range.first {(0, seg.range.first)}
+					else {((self.range.first - seg.range.first) as usize, self.range.first)};
+					let (end_off, last_addr) = if self.range.last >= seg.range.last {(0, seg.range.last)}
+					else {((seg.range.last - self.range.last) as usize, self.range.last)};
+					Some((MemoryRange{first: first_addr, last: last_addr}, &seg.data[start_off..seg.data.len() - end_off]))
+				}
+				else
+				{
+					self.next = self.base.parts.len();
+					None
+				}
+			},
+		}
+	}
+}
+
+impl<'l> FusedIterator for RangeIter<'l> {}
+
 #[cfg(test)]
 mod test
 {
@@ -324,18 +436,39 @@ mod test
 		let mut map = MemoryMap::new();
 		assert_eq!(map.put(100, b"hello"), Ok(5));
 		assert_eq!(map.put(120, b"world"), Ok(5));
-		assert_eq!(map.locate(99, false), None);
-		assert_eq!(map.locate(99, true), None);
-		assert_eq!(map.locate(100, false), Some(0));
-		assert_eq!(map.locate(100, true), Some(0));
-		assert_eq!(map.locate(104, false), Some(0));
-		assert_eq!(map.locate(104, true), Some(0));
-		assert_eq!(map.locate(105, false), None);
-		assert_eq!(map.locate(105, true), Some(0));
-		assert_eq!(map.locate(119, false), None);
-		assert_eq!(map.locate(119, true), Some(0));
-		assert_eq!(map.locate(120, false), Some(1));
-		assert_eq!(map.locate(120, true), Some(1));
+		// just before first word
+		assert_eq!(map.locate(99, Search::Exact), None);
+		assert_eq!(map.locate(99, Search::Below), None);
+		assert_eq!(map.locate(99, Search::Above), Some(0));
+		// first addr of second word
+		assert_eq!(map.locate(100, Search::Exact), Some(0));
+		assert_eq!(map.locate(100, Search::Below), Some(0));
+		assert_eq!(map.locate(100, Search::Above), Some(0));
+		// last addr of second word
+		assert_eq!(map.locate(104, Search::Exact), Some(0));
+		assert_eq!(map.locate(104, Search::Below), Some(0));
+		assert_eq!(map.locate(104, Search::Above), Some(0));
+		// just after first word (before second)
+		assert_eq!(map.locate(105, Search::Exact), None);
+		assert_eq!(map.locate(105, Search::Below), Some(0));
+		assert_eq!(map.locate(105, Search::Above), Some(1));
+		
+		// just before second word (after first)
+		assert_eq!(map.locate(119, Search::Exact), None);
+		assert_eq!(map.locate(119, Search::Below), Some(0));
+		assert_eq!(map.locate(119, Search::Above), Some(1));
+		// first addr of second word
+		assert_eq!(map.locate(120, Search::Exact), Some(1));
+		assert_eq!(map.locate(120, Search::Below), Some(1));
+		assert_eq!(map.locate(120, Search::Above), Some(1));
+		// last addr of second word
+		assert_eq!(map.locate(124, Search::Exact), Some(1));
+		assert_eq!(map.locate(124, Search::Below), Some(1));
+		assert_eq!(map.locate(124, Search::Above), Some(1));
+		// just after second word
+		assert_eq!(map.locate(125, Search::Exact), None);
+		assert_eq!(map.locate(125, Search::Below), Some(1));
+		assert_eq!(map.locate(125, Search::Above), None);
 	}
 	
 	#[test]
@@ -345,7 +478,46 @@ mod test
 		assert_eq!(map.put(100, b"hello"), Ok(5));
 		assert_eq!(map.put(120, b"world"), Ok(5));
 		assert_eq!(map.len(), 2);
+		assert_eq!(map.count(), (10, 2));
 		let mut iter = map.iter();
+		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 104}, b"hello".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 120, last: 124}, b"world".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(90, 102)), (3, 1));
+		let mut iter = map.iter_range(MemoryRange::new(90, 102));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 102}, b"hel".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(90, 110)), (5, 1));
+		let mut iter = map.iter_range(MemoryRange::new(90, 110));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 104}, b"hello".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(100, 110)), (5, 1));
+		assert!(map.iter_range(MemoryRange::new(100, 110)).eq(map.iter_range(MemoryRange::new(90, 110))));
+		assert_eq!(map.count_range(MemoryRange::new(103, 104)), (2, 1));
+		let mut iter = map.iter_range(MemoryRange::new(103, 104));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 103, last: 104}, b"lo".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(103, 110)), (2, 1));
+		assert!(map.iter_range(MemoryRange::new(103, 110)).eq(map.iter_range(MemoryRange::new(103, 104))));
+		assert_eq!(map.count_range(MemoryRange::new(105, 119)), (0, 0));
+		assert_eq!(map.iter_range(MemoryRange::new(105, 119)).next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(104, 120)), (2, 2));
+		let mut iter = map.iter_range(MemoryRange::new(104, 120));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 104, last: 104}, b"o".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 120, last: 120}, b"w".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(103, 121)), (4, 2));
+		let mut iter = map.iter_range(MemoryRange::new(103, 121));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 103, last: 104}, b"lo".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 120, last: 121}, b"wo".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(90, 121)), (7, 2));
+		let mut iter = map.iter_range(MemoryRange::new(90, 121));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 104}, b"hello".as_ref())));
+		assert_eq!(iter.next(), Some((MemoryRange{first: 120, last: 121}, b"wo".as_ref())));
+		assert_eq!(iter.next(), None);
+		assert_eq!(map.count_range(MemoryRange::new(90, 130)), (10, 2));
+		let mut iter = map.iter_range(MemoryRange::new(90, 130));
 		assert_eq!(iter.next(), Some((MemoryRange{first: 100, last: 104}, b"hello".as_ref())));
 		assert_eq!(iter.next(), Some((MemoryRange{first: 120, last: 124}, b"world".as_ref())));
 		assert_eq!(iter.next(), None);
@@ -354,6 +526,7 @@ mod test
 		assert_eq!(map.put(0, b"first"), Ok(5));
 		assert_eq!(map.put(((1u64 << u32::BITS) - 4) as u32, b"last"), Ok(4));
 		assert_eq!(map.len(), 2);
+		assert_eq!(map.count(), (9, 2));
 		let mut iter = map.iter();
 		assert_eq!(iter.next(), Some((MemoryRange{first: 0, last: 4}, b"first".as_ref())));
 		assert_eq!(iter.next(), Some((MemoryRange{first: u32::MAX - 3, last: u32::MAX}, b"last".as_ref())));
