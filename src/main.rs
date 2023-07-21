@@ -45,6 +45,7 @@ pub fn main()
 					{
 						let mut fo = OpenOptions::new().write(true).create(true).open(fop).unwrap();
 						fo.write_all(&buff.as_ref()).unwrap();
+						fo.set_len(u64::try_from(buff.len()).unwrap()).unwrap();
 						drop(fo);
 					}
 					else {println!("Assembled successfully");}
