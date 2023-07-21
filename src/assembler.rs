@@ -8,6 +8,7 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
+use crate::asm::mem::MemoryRange;
 use crate::asm::mem::map::{MemoryMap, Search};
 use crate::text::parse::{Argument, ElementValue, Parser};
 use crate::text::token::Number;
@@ -1026,47 +1027,31 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 	
 	if output.len() > 0
 	{
-		match output.get(0x10000000, Search::Exact)
+		const FLASH_BASE: u32 = 0x10000000;
+		const FLASH_CRC: u32 = FLASH_BASE + 0xFC;
+		// use `Search::Exact` because if code doesn't start right here it's not bootable
+		if output.find(FLASH_BASE, Search::Exact).is_some()
 		{
-			Some((.., seg)) =>
+			let mut temp = [0u8; 0xFC];
+			// also search in the space the CRC goes to find existing data we can't overwrite
+			for (range, data) in output.iter_range(MemoryRange::new(FLASH_BASE, FLASH_BASE + 0xFF))
 			{
-				let mut crc = Crc::new();
-				if seg.len() < 0xFC
+				if range.get_last() >= FLASH_CRC
 				{
-					let mut temp = [0u8; 0xFC];
-					let mut temp_pos = seg.len();
-					while temp_pos < temp.len()
-					{
-						match output.get(0x10000000 + temp_pos as u32, Search::Exact)
-						{
-							Some((.., seg)) =>
-							{
-								if seg.len() > temp.len() - temp_pos
-								{
-									let max = temp.len();
-									temp[temp_pos..max].copy_from_slice(&seg[..max - temp_pos]);
-									temp_pos = temp.len();
-								}
-								else
-								{
-									temp[temp_pos..temp_pos + seg.len()].copy_from_slice(seg);
-									temp_pos += seg.len();
-								}
-							},
-							// the uf2 writer aligns to multiples of 256, so these will be zero
-							None => temp_pos += 1,
-						}
-					}
-					crc.update_slice(&temp[..0xFC]);
-				}
-				else {crc.update_slice(&seg[..0xFC]);}
-				if let Err(e) = output.put(0x100000FC, &u32::to_le_bytes(crc.get_value()))
-				{
-					print_err!(e, "Checksum write failed");
+					eprintln!("Checksum would overwrite existing data");
 					return false;
 				}
-			},
-			_ => (),
+				let first = (range.get_first() - FLASH_BASE) as usize;
+				let last = (range.get_last() - FLASH_BASE) as usize;
+				temp[first..=last].copy_from_slice(data);
+			}
+			let mut crc = Crc::new();
+			crc.update_slice(&temp[..0xFC]);
+			if let Err(e) = output.put(FLASH_CRC, &u32::to_le_bytes(crc.get_value()))
+			{
+				print_err!(e, "Checksum write failed");
+				return false;
+			}
 		}
 		
 		buff.clear();
