@@ -9,6 +9,7 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
+use crate::asm::mem::map::MemoryMap;
 use crate::text::parse::{Argument, ElementValue, Parser};
 use crate::text::token::Number;
 use crate::uf2::write::Uf2Write;
@@ -28,9 +29,10 @@ fn print_err_trace(msg: &str, err: impl Error)
 pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 {
 	let base = path.parent().unwrap();
-	const BASE: u32 = 0x20000000; // FIXME remove this, should use an initial .addr
-	let mut output = Vec::new();
-	let mut image_addr: u32 = BASE;
+	let mut output = MemoryMap::new();
+	let mut temp_base = 0u32;
+	let mut temp_seg = Vec::new();
+	let mut image_addr: Option<u32> = None;
 	let mut temp_str = String::new();
 	let mut labels = HashMap::new();
 	let mut deferred = Vec::new();
@@ -80,21 +82,31 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								return false;
 							},
 						};
-						if tgt > image_addr
+						if output.get(tgt).is_some()
 						{
-							// FIXME this should not be padding for small offsets (say < 256) or maybe at all and pad in the linker or UF2 encoder
-							let len = tgt - image_addr;
-							image_addr = tgt;
-							output.resize(output.len() + len as usize, 0xBE); // BKPT
-						}
-						else if image_addr > tgt
-						{
-							eprintln!("addr cannot seek backwards ({}:{})", element.line, element.col);
+							eprintln!("address {tgt:08X} already exists ({}:{})", element.line, element.col);
 							return false;
 						}
+						if !temp_seg.is_empty()
+						{
+							if let Err(e) = output.put(temp_base, temp_seg.as_slice())
+							{
+								print_err_trace("segment write error", e);
+								return false;
+							}
+						}
+						temp_seg.clear();
+						temp_base = tgt;
+						image_addr = Some(tgt);
 					},
 					"align" =>
 					{
+						let Some(curr_addr) = image_addr
+						else
+						{
+							eprintln!("image address unset for .align ({}:{})", element.line, element.col);
+							return false;
+						};
 						if args.len() != 1
 						{
 							eprintln!("align requires exactly one argument ({}:{})", element.line, element.col);
@@ -122,15 +134,32 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							eprintln!("alignment out of range ({}:{})", element.line, element.col);
 							return false;
 						}
-						let off = image_addr % len;
+						let off = curr_addr % len;
 						if off != 0
 						{
-							image_addr += len - off;
-							output.resize(output.len() + (len - off) as usize, 0xBE); // BKPT
+							match usize::try_from(len - off)
+							{
+								Ok(new_len) =>
+								{
+									image_addr = Some(curr_addr + (len - off));
+									temp_seg.resize(temp_seg.len() + new_len, 0xBE); // BKPT
+								},
+								Err(..) =>
+								{
+									eprintln!("buffer overflow during .align ({}:{})", element.line, element.col);
+									return false;
+								},
+							}
 						}
 					},
 					"du8" | "du16" | "du32" =>
 					{
+						let Some(curr_addr) = image_addr
+						else
+						{
+							eprintln!("image address unset for .{name} ({}:{})", element.line, element.col);
+							return false;
+						};
 						let (min, max) = match name
 						{
 							"du8" => (u8::MIN as i64, u8::MAX as i64),
@@ -165,24 +194,30 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							"du8" =>
 							{
-								image_addr += u32::try_from(core::mem::size_of::<u8>()).unwrap();
-								output.push(val as u8);
+								image_addr = Some(curr_addr + u32::try_from(core::mem::size_of::<u8>()).unwrap());
+								temp_seg.push(val as u8);
 							},
 							"du16" =>
 							{
-								image_addr += u32::try_from(core::mem::size_of::<u16>()).unwrap();
-								output.extend_from_slice(&u16::to_le_bytes(val as u16));
+								image_addr = Some(curr_addr + u32::try_from(core::mem::size_of::<u16>()).unwrap());
+								temp_seg.extend_from_slice(&u16::to_le_bytes(val as u16));
 							},
 							"du32" =>
 							{
-								image_addr += u32::try_from(core::mem::size_of::<u32>()).unwrap();
-								output.extend_from_slice(&u32::to_le_bytes(val as u32));
+								image_addr = Some(curr_addr + u32::try_from(core::mem::size_of::<u32>()).unwrap());
+								temp_seg.extend_from_slice(&u32::to_le_bytes(val as u32));
 							},
 							_ => unreachable!(),
 						}
 					},
 					"dhex" =>
 					{
+						let Some(curr_addr) = image_addr
+						else
+						{
+							eprintln!("image address unset for .dhex ({}:{})", element.line, element.col);
+							return false;
+						};
 						if args.len() != 1
 						{
 							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
@@ -234,17 +269,23 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						};
 						match u32::try_from(val.len())
 						{
-							Ok(n) if n <= u32::MAX - image_addr => image_addr += n,
+							Ok(n) if n <= u32::MAX - curr_addr => image_addr = Some(curr_addr + n),
 							_ =>
 							{
 								eprintln!("hex blob too long ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
-						output.extend_from_slice(val.as_ref());
+						temp_seg.extend_from_slice(val.as_ref());
 					},
 					"dstr" =>
 					{
+						let Some(curr_addr) = image_addr
+						else
+						{
+							eprintln!("image address unset for .dstr ({}:{})", element.line, element.col);
+							return false;
+						};
 						if args.len() != 1
 						{
 							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
@@ -261,17 +302,23 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						};
 						match u32::try_from(val.len())
 						{
-							Ok(n) if n <= u32::MAX - image_addr => image_addr += n,
+							Ok(n) if n <= u32::MAX - curr_addr => image_addr = Some(curr_addr + n),
 							_ =>
 							{
 								eprintln!("hex blob too long ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
-						output.extend_from_slice(val);
+						temp_seg.extend_from_slice(val);
 					},
 					"dfile" =>
 					{
+						let Some(curr_addr) = image_addr
+						else
+						{
+							eprintln!("image address unset for .dfile ({}:{})", element.line, element.col);
+							return false;
+						};
 						if args.len() != 1
 						{
 							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
@@ -299,7 +346,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								{
 									Ok(meta) =>
 									{
-										if meta.len() > (u32::MAX - image_addr) as u64 || usize::try_from(meta.len()).is_err()
+										if meta.len() > (u32::MAX - curr_addr) as u64 || usize::try_from(meta.len()).is_err()
 										{
 											eprintln!("file too long ({}:{})", element.line, element.col);
 											return false;
@@ -314,12 +361,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 										return false;
 									},
 								};
-								match f.read_to_end(&mut output)
+								match f.read_to_end(&mut temp_seg)
 								{
 									Ok(n) =>
 									{
 										assert_eq!(n, usize::try_from(len).unwrap());
-										image_addr += len;
+										image_addr = Some(curr_addr + len);
 									},
 									Err(e) =>
 									{
@@ -346,7 +393,13 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			},
 			ElementValue::Label(name) =>
 			{
-				let prev = labels.insert(name, image_addr);
+				let Some(curr_addr) = image_addr
+				else
+				{
+					eprintln!("image address unset for label ({}:{})", element.line, element.col);
+					return false;
+				};
+				let prev = labels.insert(name, curr_addr);
 				if prev.is_some()
 				{
 					eprintln!("duplicate label {name} ({}:{})", element.line, element.col);
@@ -355,6 +408,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			},
 			ElementValue::Instruction{name, args} =>
 			{
+				let Some(curr_addr) = image_addr
+				else
+				{
+					eprintln!("image address unset for instruction ({}:{})", element.line, element.col);
+					return false;
+				};
 				enum AddrLabel<'l>
 				{
 					Address(Register, Option<ImmReg>),
@@ -583,7 +642,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					{
 						let (dst, label) = convert!(dst: Register, label: Identifier {(dst, label)});
 						let instr = Instruction::Adr{dst, off: 0};
-						deferred.push((element.line, element.col, image_addr, instr, label));
+						deferred.push((element.line, element.col, curr_addr, instr, label));
 						instr
 					},
 					"ANDS" => convert!(dst: Register, rhs: Register {Instruction::And{dst, rhs}}),
@@ -613,7 +672,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						};
 						let label = convert!(label: Identifier {label});
 						let instr = Instruction::B{cond, off: 0};
-						deferred.push((element.line, element.col, image_addr, instr, label));
+						deferred.push((element.line, element.col, curr_addr, instr, label));
 						instr
 					},
 					"BIC" => convert!(dst: Register, rhs: Register {Instruction::And{dst, rhs}}),
@@ -633,7 +692,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					{
 						let label = convert!(label: Identifier {label});
 						let instr = Instruction::Bl{off: 0};
-						deferred.push((element.line, element.col, image_addr, instr, label));
+						deferred.push((element.line, element.col, curr_addr, instr, label));
 						instr
 					},
 					"BLX" => convert!(off: Register {Instruction::Blx{off}}),
@@ -701,7 +760,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								AddrLabel::Label(label) =>
 								{
 									let instr = Instruction::Ldr{dst, addr: Register::PC, off: ImmReg::Immediate(0)};
-									deferred.push((element.line, element.col, image_addr, instr, label));
+									deferred.push((element.line, element.col, curr_addr, instr, label));
 									instr
 								},
 							}
@@ -831,8 +890,8 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				{
 					Ok(len) =>
 					{
-						image_addr += len as u32;
-						output.extend_from_slice(&tmp[..len]);
+						image_addr = Some(curr_addr + len as u32);
+						temp_seg.extend_from_slice(&tmp[..len]);
 					},
 					Err(e) =>
 					{
@@ -841,6 +900,14 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 				}
 			},
+		}
+	}
+	if !temp_seg.is_empty()
+	{
+		if let Err(e) = output.put(temp_base, temp_seg.as_slice())
+		{
+			print_err_trace("segment write error", e);
+			return false;
 		}
 	}
 	
@@ -909,8 +976,11 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 		{
 			Ok(len) =>
 			{
-				let start = (addr - BASE) as usize;
-				output[start..start + len].copy_from_slice(&tmp[..len]);
+				if let Err(e) = output.put(addr, &tmp[..len])
+				{
+					print_err_trace("late instruction write failed", e);
+					return false;
+				}
 			},
 			Err(e) =>
 			{
@@ -922,17 +992,63 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 	
 	if output.len() > 0
 	{
-		if (output.len() & 0xFF) != 0
+		match output.get(0x10000000)
 		{
-			output.resize(output.len() + (0x100 - (output.len() & 0xFF)), 0);
+			Some(seg) =>
+			{
+				let mut crc = Crc::new();
+				if seg.len() < 0xFC
+				{
+					let mut temp = [0u8; 0xFC];
+					let mut temp_pos = seg.len();
+					while temp_pos < temp.len()
+					{
+						match output.get(0x10000000 + temp_pos as u32)
+						{
+							Some(seg) =>
+							{
+								if seg.len() > temp.len() - temp_pos
+								{
+									let max = temp.len();
+									temp[temp_pos..max].copy_from_slice(&seg[..max - temp_pos]);
+									temp_pos = temp.len();
+								}
+								else
+								{
+									temp[temp_pos..temp_pos + seg.len()].copy_from_slice(seg);
+									temp_pos += seg.len();
+								}
+							},
+							// the uf2 writer aligns to multiples of 256, so these will be zero
+							None => temp_pos += 1,
+						}
+					}
+					crc.update_slice(&temp[..0xFC]);
+				}
+				else {crc.update_slice(&seg[..0xFC]);}
+				if let Err(e) = output.put(0x100000FC, &u32::to_le_bytes(crc.get_value()))
+				{
+					print_err_trace("checksum write failed", e);
+					return false;
+				}
+			},
+			_ => (),
 		}
-		let mut crc = Crc::new();
-		crc.update_slice(&output[..0xFC]);
-		output[0xFC..0x100].copy_from_slice(&u32::to_le_bytes(crc.get_value()));
 		
 		buff.clear();
 		let mut dst = Uf2Write::new_vec(Some(0xE48BFF56), 256, 256, buff).unwrap();
-		dst.write_all(BASE, output.as_ref(), false).unwrap();
+		for (range, seg) in output.iter()
+		{
+			match dst.write_all(range.get_first(), seg, false)
+			{
+				Ok(..) => (),
+				Err(e) =>
+				{
+					print_err_trace("uf2 write failed", e);
+					return false;
+				},
+			};
+		}
 		drop(dst);
 		true
 	}
