@@ -77,14 +77,19 @@ impl MemoryMap
 		}
 	}
 	
-	pub fn get(&self, addr: u32) -> Option<&[u8]>
+	pub fn find(&self, addr: u32, search: Search) -> Option<MemoryRange>
 	{
-		self.locate(addr, Search::Exact).map(|i| &self.parts[i]).map(|p| &p.data[(addr - p.range.first) as usize..])
+		self.locate(addr, search).map(|i| self.parts[i].range)
 	}
 	
-	pub fn get_mut(&mut self, addr: u32) -> Option<&mut [u8]>
+	pub fn get(&self, addr: u32, search: Search) -> Option<(MemoryRange, &[u8])>
 	{
-		self.locate(addr, Search::Exact).map(|i| &mut self.parts[i]).map(|p| &mut p.data[(addr - p.range.first) as usize..])
+		self.locate(addr, search).map(|i| &self.parts[i]).map(|p| (p.range, &p.data[(addr - p.range.first) as usize..]))
+	}
+	
+	pub fn get_mut(&mut self, addr: u32, search: Search) -> Option<(MemoryRange, &mut [u8])>
+	{
+		self.locate(addr, search).map(|i| &mut self.parts[i]).map(|p| (p.range, &mut p.data[(addr - p.range.first) as usize..]))
 	}
 	
 	pub fn put(&mut self, addr: u32, data: &[u8]) -> Result<usize, PutError>

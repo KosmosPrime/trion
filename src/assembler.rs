@@ -8,7 +8,7 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
-use crate::asm::mem::map::MemoryMap;
+use crate::asm::mem::map::{MemoryMap, Search};
 use crate::text::parse::{Argument, ElementValue, Parser};
 use crate::text::token::Number;
 use crate::uf2::write::Uf2Write;
@@ -32,6 +32,22 @@ macro_rules!print_err
 	};
 }
 
+macro_rules!space_check
+{
+	($next:expr, $curr:expr, $need:expr, $line:expr, $col:expr) =>
+	{
+		match $next
+		{
+			Some(next) if next - $curr < $need =>
+			{
+				eprintln!("Segment overflow at {:08X} ({}:{})", $curr, $line, $col);
+				return false;
+			},
+			_ => (),
+		}
+	};
+}
+
 pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 {
 	let base = path.parent().unwrap();
@@ -39,6 +55,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 	let mut temp_base = 0u32;
 	let mut temp_seg = Vec::new();
 	let mut image_addr: Option<u32> = None;
+	let mut image_next: Option<u32> = None;
 	let mut temp_str = String::new();
 	let mut labels = HashMap::new();
 	let mut deferred = Vec::new();
@@ -88,11 +105,6 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								return false;
 							},
 						};
-						if output.get(tgt).is_some()
-						{
-							eprintln!("Address {tgt:08X} already exists ({}:{})", element.line, element.col);
-							return false;
-						}
 						if !temp_seg.is_empty()
 						{
 							if let Err(e) = output.put(temp_base, temp_seg.as_slice())
@@ -101,9 +113,19 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								return false;
 							}
 						}
+						let next = output.find(tgt, Search::Above);
+						if let Some(range) = next
+						{
+							if tgt >= range.get_first()
+							{
+								eprintln!("Address {tgt:08X} already exists ({}:{})", element.line, element.col);
+								return false;
+							}
+						}
 						temp_seg.clear();
 						temp_base = tgt;
 						image_addr = Some(tgt);
+						image_next = next.map(|r| r.get_first());
 					},
 					"align" =>
 					{
@@ -147,6 +169,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							{
 								Ok(new_len) =>
 								{
+									space_check!(image_next, curr_addr, len - off, element.line, element.col);
 									image_addr = Some(curr_addr + (len - off));
 									temp_seg.resize(temp_seg.len() + new_len, 0xBE); // BKPT
 								},
@@ -166,11 +189,11 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							eprintln!("Image address unset for .{name} ({}:{})", element.line, element.col);
 							return false;
 						};
-						let (min, max) = match name
+						let (min, max, n) = match name
 						{
-							"du8" => (u8::MIN as i64, u8::MAX as i64),
-							"du16" => (u16::MIN as i64, u16::MAX as i64),
-							"du32" => (u32::MIN as i64, u32::MAX as i64),
+							"du8" => (u8::MIN as i64, u8::MAX as i64, 1),
+							"du16" => (u16::MIN as i64, u16::MAX as i64, 2),
+							"du32" => (u32::MIN as i64, u32::MAX as i64, 4),
 							_ => unreachable!(),
 						};
 						if args.len() != 1
@@ -196,6 +219,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 						};
 						
+						space_check!(image_next, curr_addr, n, element.line, element.col);
 						match name
 						{
 							"du8" =>
@@ -275,7 +299,11 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						};
 						match u32::try_from(val.len())
 						{
-							Ok(n) if n <= u32::MAX - curr_addr => image_addr = Some(curr_addr + n),
+							Ok(n) if n <= u32::MAX - curr_addr =>
+							{
+								space_check!(image_next, curr_addr, n, element.line, element.col);
+								image_addr = Some(curr_addr + n)
+							},
 							_ =>
 							{
 								eprintln!("Hex blob too long ({}:{})", element.line, element.col);
@@ -308,7 +336,11 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						};
 						match u32::try_from(val.len())
 						{
-							Ok(n) if n <= u32::MAX - curr_addr => image_addr = Some(curr_addr + n),
+							Ok(n) if n <= u32::MAX - curr_addr =>
+							{
+								space_check!(image_next, curr_addr, n, element.line, element.col);
+								image_addr = Some(curr_addr + n)
+							},
 							_ =>
 							{
 								eprintln!("Hex blob too long ({}:{})", element.line, element.col);
@@ -363,6 +395,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 										return false;
 									},
 								};
+								space_check!(image_next, curr_addr, len, element.line, element.col);
 								match f.read_to_end(&mut temp_seg)
 								{
 									Ok(n) =>
@@ -890,6 +923,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				{
 					Ok(len) =>
 					{
+						space_check!(image_next, curr_addr, len as u32, element.line, element.col);
 						image_addr = Some(curr_addr + len as u32);
 						temp_seg.extend_from_slice(&tmp[..len]);
 					},
@@ -992,9 +1026,9 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 	
 	if output.len() > 0
 	{
-		match output.get(0x10000000)
+		match output.get(0x10000000, Search::Exact)
 		{
-			Some(seg) =>
+			Some((.., seg)) =>
 			{
 				let mut crc = Crc::new();
 				if seg.len() < 0xFC
@@ -1003,9 +1037,9 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					let mut temp_pos = seg.len();
 					while temp_pos < temp.len()
 					{
-						match output.get(0x10000000 + temp_pos as u32)
+						match output.get(0x10000000 + temp_pos as u32, Search::Exact)
 						{
-							Some(seg) =>
+							Some((.., seg)) =>
 							{
 								if seg.len() > temp.len() - temp_pos
 								{
