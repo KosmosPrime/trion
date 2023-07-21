@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::Path;
@@ -15,15 +14,22 @@ use crate::text::token::Number;
 use crate::uf2::write::Uf2Write;
 use crate::uf2::crc::Crc;
 
-fn print_err_trace(msg: &str, err: impl Error)
+macro_rules!print_err
 {
-	eprintln!("{msg}: {err}");
-	let mut source = err.source();
-	while let Some(src) = source
+	($err:ident, $($print:expr),+) =>
 	{
-		eprintln!("\tsource: {src}");
-		source = src.source();
-	}
+		{
+			use std::error::Error;
+			eprint!($($print),+);
+			eprintln!(": {}", $err);
+			let mut source = $err.source();
+			while let Some(src) = source
+			{
+				eprintln!("\tsource: {src}");
+				source = src.source();
+			}
+		}
+	};
 }
 
 pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
@@ -44,7 +50,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			Ok(el) => el,
 			Err(err) =>
 			{
-				print_err_trace("parsing failed", err);
+				print_err!(err, "Parsing failed");
 				return false;
 			},
 		};
@@ -62,7 +68,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					{
 						if args.len() != 1
 						{
-							eprintln!("addr requires exactly one argument ({}:{})", element.line, element.col);
+							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
 							return false;
 						}
 						let tgt = match args[0]
@@ -71,27 +77,27 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							{
 								let Ok(val) = u32::try_from(val) else
 								{
-									eprintln!("address out of range ({}:{})", element.line, element.col);
+									eprintln!("Address out of range ({}:{})", element.line, element.col);
 									return false;
 								};
 								val
 							},
 							_ =>
 							{
-								eprintln!("invalid address ({}:{})", element.line, element.col);
+								eprintln!("Invalid address ({}:{})", element.line, element.col);
 								return false;
 							},
 						};
 						if output.get(tgt).is_some()
 						{
-							eprintln!("address {tgt:08X} already exists ({}:{})", element.line, element.col);
+							eprintln!("Address {tgt:08X} already exists ({}:{})", element.line, element.col);
 							return false;
 						}
 						if !temp_seg.is_empty()
 						{
 							if let Err(e) = output.put(temp_base, temp_seg.as_slice())
 							{
-								print_err_trace("segment write error", e);
+								print_err!(e, "Segment write error ({}:{})", element.line, element.col);
 								return false;
 							}
 						}
@@ -104,12 +110,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						let Some(curr_addr) = image_addr
 						else
 						{
-							eprintln!("image address unset for .align ({}:{})", element.line, element.col);
+							eprintln!("Image address unset for .align ({}:{})", element.line, element.col);
 							return false;
 						};
 						if args.len() != 1
 						{
-							eprintln!("align requires exactly one argument ({}:{})", element.line, element.col);
+							eprintln!("Align requires exactly one argument ({}:{})", element.line, element.col);
 							return false;
 						}
 						let len = match args[0]
@@ -118,20 +124,20 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							{
 								let Ok(val) = u32::try_from(val) else
 								{
-									eprintln!("alignment out of range ({}:{})", element.line, element.col);
+									eprintln!("Alignment out of range ({}:{})", element.line, element.col);
 									return false;
 								};
 								val
 							},
 							_ =>
 							{
-								eprintln!("invalid alignment ({}:{})", element.line, element.col);
+								eprintln!("Invalid alignment ({}:{})", element.line, element.col);
 								return false;
 							},
 						};
 						if len == 0
 						{
-							eprintln!("alignment out of range ({}:{})", element.line, element.col);
+							eprintln!("Alignment out of range ({}:{})", element.line, element.col);
 							return false;
 						}
 						let off = curr_addr % len;
@@ -146,7 +152,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								},
 								Err(..) =>
 								{
-									eprintln!("buffer overflow during .align ({}:{})", element.line, element.col);
+									eprintln!("Buffer overflow during .align ({}:{})", element.line, element.col);
 									return false;
 								},
 							}
@@ -157,7 +163,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						let Some(curr_addr) = image_addr
 						else
 						{
-							eprintln!("image address unset for .{name} ({}:{})", element.line, element.col);
+							eprintln!("Image address unset for .{name} ({}:{})", element.line, element.col);
 							return false;
 						};
 						let (min, max) = match name
@@ -169,7 +175,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						};
 						if args.len() != 1
 						{
-							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
+							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
 							return false;
 						}
 						let val = match args[0]
@@ -178,14 +184,14 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							{
 								if val < min || val > max
 								{
-									eprintln!("data value out of range ({}:{})", element.line, element.col);
+									eprintln!("Data value out of range ({}:{})", element.line, element.col);
 									return false;
 								}
 								val
 							},
 							_ =>
 							{
-								eprintln!("invalid data value ({}:{})", element.line, element.col);
+								eprintln!("Invalid data value ({}:{})", element.line, element.col);
 								return false;
 							},
 						};
@@ -215,12 +221,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						let Some(curr_addr) = image_addr
 						else
 						{
-							eprintln!("image address unset for .dhex ({}:{})", element.line, element.col);
+							eprintln!("Image address unset for .dhex ({}:{})", element.line, element.col);
 							return false;
 						};
 						if args.len() != 1
 						{
-							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
+							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
 							return false;
 						}
 						let val = match args[0]
@@ -235,8 +241,8 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 									{
 										None =>
 										{
-											eprintln!("in {in_hex:?} {carry:?} {c:?}");
 											eprintln!("malformed hex string ({}:{})", element.line, element.col);
+											eprintln!("\tin {in_hex:?} {carry:?} {c:?}");
 											return false;
 										},
 										Some(v) =>
@@ -256,14 +262,14 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								}
 								if carry.is_some()
 								{
-									eprintln!("malformed hex string ({}:{})", element.line, element.col);
+									eprintln!("Malformed hex string ({}:{})", element.line, element.col);
 									return false;
 								}
 								out_data
 							},
 							_ =>
 							{
-								eprintln!("invalid data value ({}:{})", element.line, element.col);
+								eprintln!("Invalid data value ({}:{})", element.line, element.col);
 								return false;
 							},
 						};
@@ -272,7 +278,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							Ok(n) if n <= u32::MAX - curr_addr => image_addr = Some(curr_addr + n),
 							_ =>
 							{
-								eprintln!("hex blob too long ({}:{})", element.line, element.col);
+								eprintln!("Hex blob too long ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
@@ -283,12 +289,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						let Some(curr_addr) = image_addr
 						else
 						{
-							eprintln!("image address unset for .dstr ({}:{})", element.line, element.col);
+							eprintln!("Image address unset for .dstr ({}:{})", element.line, element.col);
 							return false;
 						};
 						if args.len() != 1
 						{
-							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
+							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
 							return false;
 						}
 						let val = match args[0]
@@ -296,7 +302,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							Argument::String(ref val) => val.as_ref().as_bytes(),
 							_ =>
 							{
-								eprintln!("invalid data value ({}:{})", element.line, element.col);
+								eprintln!("Invalid data value ({}:{})", element.line, element.col);
 								return false;
 							},
 						};
@@ -305,7 +311,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							Ok(n) if n <= u32::MAX - curr_addr => image_addr = Some(curr_addr + n),
 							_ =>
 							{
-								eprintln!("hex blob too long ({}:{})", element.line, element.col);
+								eprintln!("Hex blob too long ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
@@ -316,29 +322,26 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						let Some(curr_addr) = image_addr
 						else
 						{
-							eprintln!("image address unset for .dfile ({}:{})", element.line, element.col);
+							eprintln!("Image address unset for .dfile ({}:{})", element.line, element.col);
 							return false;
 						};
 						if args.len() != 1
 						{
-							eprintln!("{name} requires exactly one argument ({}:{})", element.line, element.col);
+							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
 							return false;
 						}
 						let path = match args[0]
 						{
-							Argument::String(ref val) =>
-							{
-								let mut tmp = base.to_path_buf();
-								tmp.push(val.as_ref());
-								tmp
-							},
+							Argument::String(ref s) => s.as_ref() as &str,
 							_ =>
 							{
-								eprintln!("invalid path value ({}:{})", element.line, element.col);
+								eprintln!("Invalid path value ({}:{})", element.line, element.col);
 								return false;
 							},
 						};
-						match OpenOptions::new().read(true).open(path)
+						let mut path_buff = base.to_path_buf();
+						path_buff.push(path);
+						match OpenOptions::new().read(true).open(path_buff)
 						{
 							Ok(mut f) =>
 							{
@@ -348,7 +351,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 									{
 										if meta.len() > (u32::MAX - curr_addr) as u64 || usize::try_from(meta.len()).is_err()
 										{
-											eprintln!("file too long ({}:{})", element.line, element.col);
+											eprintln!("File too long ({}:{})", element.line, element.col);
 											return false;
 										}
 										// `meta.len()` fits into an u32 because of the first comparison
@@ -356,8 +359,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 									},
 									Err(e) =>
 									{
-										eprintln!("could not access file metadata ({}:{})", element.line, element.col);
-										print_err_trace("file access error", e);
+										print_err!(e, "Cannot access metadata of {path:?} ({}:{})", element.line, element.col);
 										return false;
 									},
 								};
@@ -370,23 +372,21 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 									},
 									Err(e) =>
 									{
-										eprintln!("could not read file ({}:{})", element.line, element.col);
-										print_err_trace("file access error", e);
+										print_err!(e, "Could not read file {path:?} ({}:{})", element.line, element.col);
 										return false;
 									},
 								}
 							},
 							Err(e) =>
 							{
-								eprintln!("could not open file ({}:{})", element.line, element.col);
-								print_err_trace("file access error", e);
+								print_err!(e, "Could not open file {path:?} ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
 					},
 					_ =>
 					{
-						eprintln!("unknown directive {name:?} ({}:{})", element.line, element.col);
+						eprintln!("Unknown directive {name:?} ({}:{})", element.line, element.col);
 						return false;
 					},
 				}
@@ -396,13 +396,13 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				let Some(curr_addr) = image_addr
 				else
 				{
-					eprintln!("image address unset for label ({}:{})", element.line, element.col);
+					eprintln!("Image address unset for label ({}:{})", element.line, element.col);
 					return false;
 				};
 				let prev = labels.insert(name, curr_addr);
 				if prev.is_some()
 				{
-					eprintln!("duplicate label {name} ({}:{})", element.line, element.col);
+					eprintln!("Duplicate label {name} ({}:{})", element.line, element.col);
 					return false;
 				}
 			},
@@ -411,7 +411,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				let Some(curr_addr) = image_addr
 				else
 				{
-					eprintln!("image address unset for instruction ({}:{})", element.line, element.col);
+					eprintln!("Image address unset for instruction ({}:{})", element.line, element.col);
 					return false;
 				};
 				enum AddrLabel<'l>
@@ -428,12 +428,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							if args.len() - arg_pos > convert!(@impl/count {$($which)*})
 							{
-								eprintln!("too many arguments for {name} ({}:{})", element.line, element.col);
+								eprintln!("Too many arguments for {name} ({}:{})", element.line, element.col);
 								return false;
 							}
 							if args.len() - arg_pos < convert!(@impl/count {$($which)*})
 							{
-								eprintln!("not enough arguments for {name} ({}:{})", element.line, element.col);
+								eprintln!("Not enough arguments for {name} ({}:{})", element.line, element.col);
 								return false;
 							}
 							$(
@@ -454,7 +454,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								let Ok(val) = i32::try_from(val)
 								else
 								{
-									eprintln!("argument {}: out of range ({}:{})", arg_pos + 1, element.line, element.col);
+									eprintln!("Argument {}: out of range ({}:{})", arg_pos + 1, element.line, element.col);
 									return false;
 								};
 								arg_pos += 1;
@@ -462,7 +462,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -478,7 +478,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected identifier ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected identifier ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -492,7 +492,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								let Some(reg) = regl(ident)
 								else
 								{
-									eprintln!("argument {}: no such register ({}:{})", arg_pos + 1, element.line, element.col);
+									eprintln!("Argument {}: no such register ({}:{})", arg_pos + 1, element.line, element.col);
 									return false;
 								};
 								arg_pos += 1;
@@ -500,7 +500,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -514,7 +514,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								let Some(reg) = sysl(ident)
 								else
 								{
-									eprintln!("argument {}: no such register ({}:{})", arg_pos + 1, element.line, element.col);
+									eprintln!("Argument {}: no such register ({}:{})", arg_pos + 1, element.line, element.col);
 									return false;
 								};
 								arg_pos += 1;
@@ -522,7 +522,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -536,7 +536,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								let Ok(val) = i32::try_from(val)
 								else
 								{
-									eprintln!("argument {}: out of range ({}:{})", arg_pos + 1, element.line, element.col);
+									eprintln!("Argument {}: out of range ({}:{})", arg_pos + 1, element.line, element.col);
 									return false;
 								};
 								arg_pos += 1;
@@ -547,7 +547,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								let Some(reg) = regl(ident)
 								else
 								{
-									eprintln!("argument {}: no such register ({}:{})", arg_pos + 1, element.line, element.col);
+									eprintln!("Argument {}: no such register ({}:{})", arg_pos + 1, element.line, element.col);
 									return false;
 								};
 								arg_pos += 1;
@@ -555,7 +555,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -569,7 +569,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								let Some(regs) = regset(items)
 								else
 								{
-									eprintln!("argument {}: malformed register set ({}:{})", arg_pos + 1, element.line, element.col);
+									eprintln!("Argument {}: malformed register set ({}:{})", arg_pos + 1, element.line, element.col);
 									return false;
 								};
 								arg_pos += 1;
@@ -577,7 +577,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected register set ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected register set ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -598,7 +598,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected address ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected address ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -624,7 +624,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("argument {}: expected address ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected address ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -683,7 +683,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							info @ 0.. if info <= u8::MAX as i32 => Instruction::Bkpt{info: info as u8},
 							_ =>
 							{
-								eprintln!("argument {arg_pos}: out of range ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: out of range ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
@@ -705,7 +705,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							if pm != "i"
 							{
-								eprintln!("argument {arg_pos}: \"i\" flag required to modify PRIMASK ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: \"i\" flag required to modify PRIMASK ({}:{})", element.line, element.col);
 								return false;
 							}
 						});
@@ -717,7 +717,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							if opt != "SV"
 							{
-								eprintln!("argument {arg_pos}: no such barrier option ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: no such barrier option ({}:{})", element.line, element.col);
 								return false;
 							}
 						});
@@ -729,7 +729,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							if opt != "SV"
 							{
-								eprintln!("argument {arg_pos}: no such barrier option ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: no such barrier option ({}:{})", element.line, element.col);
 								return false;
 							}
 						});
@@ -742,7 +742,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							if opt != "SV"
 							{
-								eprintln!("argument {arg_pos}: no such barrier option ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: no such barrier option ({}:{})", element.line, element.col);
 								return false;
 							}
 						});
@@ -780,7 +780,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 									{
 										None | Some(ImmReg::Immediate(..)) =>
 										{
-											eprintln!("argument {arg_pos}: unreachable address ({}:{})", element.line, element.col);
+											eprintln!("Argument {arg_pos}: unreachable address ({}:{})", element.line, element.col);
 											return false;
 										},
 										Some(ImmReg::Register(off)) => Instruction::Ldrsb{dst, addr: addr.0, off},
@@ -792,7 +792,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 									{
 										None | Some(ImmReg::Immediate(..)) =>
 										{
-											eprintln!("argument {arg_pos}: unreachable address ({}:{})", element.line, element.col);
+											eprintln!("Argument {arg_pos}: unreachable address ({}:{})", element.line, element.col);
 											return false;
 										},
 										Some(ImmReg::Register(off)) => Instruction::Ldrsh{dst, addr: addr.0, off},
@@ -823,7 +823,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							if rhs != 0
 							{
-								eprintln!("argument {arg_pos}: unsupported operand, must be zero ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: unsupported operand, must be zero ({}:{})", element.line, element.col);
 								return false;
 							}
 							Instruction::Rsb{dst, lhs}
@@ -853,7 +853,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							info @ 0.. if info <= u8::MAX as i32 => Instruction::Svc{info: info as u8},
 							_ =>
 							{
-								eprintln!("argument {arg_pos}: out of range ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: out of range ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
@@ -869,7 +869,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							info @ 0.. if info <= u16::MAX as i32 && name.as_bytes()[name.len() - 1] != b'N' => Instruction::Udfw{info: info as u16},
 							_ =>
 							{
-								eprintln!("argument {arg_pos}: out of range ({}:{})", element.line, element.col);
+								eprintln!("Argument {arg_pos}: out of range ({}:{})", element.line, element.col);
 								return false;
 							},
 						}
@@ -881,7 +881,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					"YIELD" => convert!({Instruction::Yield}),
 					_ =>
 					{
-						eprintln!("no such instruction {temp_str}");
+						eprintln!("No such instruction {temp_str}");
 						return false;
 					},
 				};
@@ -895,7 +895,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 					Err(e) =>
 					{
-						print_err_trace("encoding failed", e);
+						print_err!(e, "Encoding failed ({}:{})", element.line, element.col);
 						return false;
 					},
 				}
@@ -906,7 +906,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 	{
 		if let Err(e) = output.put(temp_base, temp_seg.as_slice())
 		{
-			print_err_trace("segment write error", e);
+			print_err!(e, "Segment write error (eof)");
 			return false;
 		}
 	}
@@ -978,13 +978,13 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			{
 				if let Err(e) = output.put(addr, &tmp[..len])
 				{
-					print_err_trace("late instruction write failed", e);
+					print_err!(e, "Late instruction write failed ({}:{})", line, col);
 					return false;
 				}
 			},
 			Err(e) =>
 			{
-				print_err_trace("late encoding failed", e);
+				print_err!(e, "Late encoding failed ({}:{})", line, col);
 				return false;
 			},
 		}
@@ -1028,7 +1028,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				else {crc.update_slice(&seg[..0xFC]);}
 				if let Err(e) = output.put(0x100000FC, &u32::to_le_bytes(crc.get_value()))
 				{
-					print_err_trace("checksum write failed", e);
+					print_err!(e, "Checksum write failed");
 					return false;
 				}
 			},
@@ -1044,7 +1044,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				Ok(..) => (),
 				Err(e) =>
 				{
-					print_err_trace("uf2 write failed", e);
+					print_err!(e, "UF2 write failed");
 					return false;
 				},
 			};
@@ -1145,7 +1145,7 @@ fn addr_off<'l>(addr: &Argument<'l>, arg_pos: usize, line: u32, col: u32) -> Opt
 			let Some(addr) = regl(name)
 			else
 			{
-				eprintln!("argument {arg_pos}: no such register ({line}:{col})");
+				eprintln!("Argument {arg_pos}: no such register ({line}:{col})");
 				return None;
 			};
 			Some((addr, Some(ImmReg::Immediate(0))))
@@ -1154,7 +1154,7 @@ fn addr_off<'l>(addr: &Argument<'l>, arg_pos: usize, line: u32, col: u32) -> Opt
 		{
 			if parts.len() != 2
 			{
-				eprintln!("argument {arg_pos}: unreachable address ({line}:{col})");
+				eprintln!("Argument {arg_pos}: unreachable address ({line}:{col})");
 				return None;
 			}
 			match (&parts[0], &parts[1])
@@ -1164,13 +1164,13 @@ fn addr_off<'l>(addr: &Argument<'l>, arg_pos: usize, line: u32, col: u32) -> Opt
 					let Some(addr) = regl(addr)
 					else
 					{
-						eprintln!("argument {arg_pos}: unreachable address ({line}:{col})");
+						eprintln!("Argument {arg_pos}: unreachable address ({line}:{col})");
 						return None;
 					};
 					let Some(off) = regl(off)
 					else
 					{
-						eprintln!("argument {arg_pos}: unreachable address ({line}:{col})");
+						eprintln!("Argument {arg_pos}: unreachable address ({line}:{col})");
 						return None;
 					};
 					Some((addr, Some(ImmReg::Register(off))))
@@ -1181,27 +1181,27 @@ fn addr_off<'l>(addr: &Argument<'l>, arg_pos: usize, line: u32, col: u32) -> Opt
 					let Some(addr) = regl(addr)
 					else
 					{
-						eprintln!("argument {arg_pos}: unreachable address ({line}:{col})");
+						eprintln!("Argument {arg_pos}: unreachable address ({line}:{col})");
 						return None;
 					};
 					let Ok(off) = i32::try_from(off)
 					else
 					{
-						eprintln!("argument {arg_pos}: unreachable address ({line}:{col})");
+						eprintln!("Argument {arg_pos}: unreachable address ({line}:{col})");
 						return None;
 					};
 					Some((addr, Some(ImmReg::Immediate(off))))
 				},
 				_ =>
 				{
-					eprintln!("argument {arg_pos}: unreachable address ({line}:{col})");
+					eprintln!("Argument {arg_pos}: unreachable address ({line}:{col})");
 					return None;
 				},
 			}
 		},
 		_ =>
 		{
-			eprintln!("argument {arg_pos}: unreachable address ({line}:{col})");
+			eprintln!("Argument {arg_pos}: unreachable address ({line}:{col})");
 			return None;
 		},
 	}
