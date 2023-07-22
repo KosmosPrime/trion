@@ -49,13 +49,68 @@ macro_rules!space_check
 	};
 }
 
+enum ImageAddress
+{
+	Initial, Value(u32), Overflow,
+}
+
+impl ImageAddress
+{
+	fn add(&mut self, n: u32)
+	{
+		match self
+		{
+			Self::Initial => panic!("not initialized"),
+			Self::Value(v) =>
+			{
+				*self = match v.checked_add(n)
+				{
+					None => Self::Overflow,
+					Some(r) => Self::Value(r),
+				};
+			},
+			Self::Overflow => panic!("address overflow"),
+		}
+	}
+}
+
+macro_rules!image_addr
+{
+	(let $dst:ident = $src:ident; print($($print:expr),+) @ ($line:expr, $col:expr)) =>
+	{
+		// stderr simply uses unwrap because failing to print to stderr means whatever message won't go through
+		let $dst = match $src
+		{
+			ImageAddress::Initial =>
+			{
+				use std::io::Write;
+				let mut stderr = std::io::stderr().lock();
+				write!(stderr, "Image address unset for ").unwrap();
+				write!(stderr, $($print),+).unwrap();
+				write!(stderr, " ({}:{})\n", $line, $col).unwrap();
+				return false;
+			},
+			ImageAddress::Value(v) => v,
+			ImageAddress::Overflow =>
+			{
+				use std::io::Write;
+				let mut stderr = std::io::stderr().lock();
+				write!(stderr, "Address overflow at ").unwrap();
+				write!(stderr, $($print),+).unwrap();
+				write!(stderr, " ({}:{})\n", $line, $col).unwrap();
+				return false;
+			},
+		};
+	};
+}
+
 pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 {
 	let base = path.parent().unwrap();
 	let mut output = MemoryMap::new();
 	let mut temp_base = 0u32;
 	let mut temp_seg = Vec::new();
-	let mut image_addr: Option<u32> = None;
+	let mut image_addr = ImageAddress::Initial;
 	let mut image_next: Option<u32> = None;
 	let mut temp_str = String::new();
 	let mut labels = HashMap::new();
@@ -125,17 +180,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						}
 						temp_seg.clear();
 						temp_base = tgt;
-						image_addr = Some(tgt);
+						image_addr = ImageAddress::Value(tgt);
 						image_next = next.map(|r| r.get_first());
 					},
 					"align" =>
 					{
-						let Some(curr_addr) = image_addr
-						else
-						{
-							eprintln!("Image address unset for .align ({}:{})", element.line, element.col);
-							return false;
-						};
+						image_addr!(let curr_addr = image_addr; print(".align") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("Align requires exactly one argument ({}:{})", element.line, element.col);
@@ -171,7 +221,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								Ok(new_len) =>
 								{
 									space_check!(image_next, curr_addr, len - off, element.line, element.col);
-									image_addr = Some(curr_addr + (len - off));
+									image_addr.add(len - off);
 									temp_seg.resize(temp_seg.len() + new_len, 0xBE); // BKPT
 								},
 								Err(..) =>
@@ -184,12 +234,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 					"du8" | "du16" | "du32" =>
 					{
-						let Some(curr_addr) = image_addr
-						else
-						{
-							eprintln!("Image address unset for .{name} ({}:{})", element.line, element.col);
-							return false;
-						};
+						image_addr!(let curr_addr = image_addr; print(".{name}") @ (element.line, element.col));
 						let (min, max, n) = match name
 						{
 							"du8" => (u8::MIN as i64, u8::MAX as i64, 1),
@@ -225,17 +270,17 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						{
 							"du8" =>
 							{
-								image_addr = Some(curr_addr + u32::try_from(core::mem::size_of::<u8>()).unwrap());
+								image_addr.add(u32::try_from(core::mem::size_of::<u8>()).unwrap());
 								temp_seg.push(val as u8);
 							},
 							"du16" =>
 							{
-								image_addr = Some(curr_addr + u32::try_from(core::mem::size_of::<u16>()).unwrap());
+								image_addr.add(u32::try_from(core::mem::size_of::<u16>()).unwrap());
 								temp_seg.extend_from_slice(&u16::to_le_bytes(val as u16));
 							},
 							"du32" =>
 							{
-								image_addr = Some(curr_addr + u32::try_from(core::mem::size_of::<u32>()).unwrap());
+								image_addr.add(u32::try_from(core::mem::size_of::<u32>()).unwrap());
 								temp_seg.extend_from_slice(&u32::to_le_bytes(val as u32));
 							},
 							_ => unreachable!(),
@@ -243,12 +288,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 					"dhex" =>
 					{
-						let Some(curr_addr) = image_addr
-						else
-						{
-							eprintln!("Image address unset for .dhex ({}:{})", element.line, element.col);
-							return false;
-						};
+						image_addr!(let curr_addr = image_addr; print(".dhex") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
@@ -303,7 +343,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							Ok(n) if n <= u32::MAX - curr_addr =>
 							{
 								space_check!(image_next, curr_addr, n, element.line, element.col);
-								image_addr = Some(curr_addr + n)
+								image_addr.add(n);
 							},
 							_ =>
 							{
@@ -315,12 +355,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 					"dstr" =>
 					{
-						let Some(curr_addr) = image_addr
-						else
-						{
-							eprintln!("Image address unset for .dstr ({}:{})", element.line, element.col);
-							return false;
-						};
+						image_addr!(let curr_addr = image_addr; print(".dstr") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
@@ -340,7 +375,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							Ok(n) if n <= u32::MAX - curr_addr =>
 							{
 								space_check!(image_next, curr_addr, n, element.line, element.col);
-								image_addr = Some(curr_addr + n)
+								image_addr.add(n);
 							},
 							_ =>
 							{
@@ -352,12 +387,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 					"dfile" =>
 					{
-						let Some(curr_addr) = image_addr
-						else
-						{
-							eprintln!("Image address unset for .dfile ({}:{})", element.line, element.col);
-							return false;
-						};
+						image_addr!(let curr_addr = image_addr; print(".dfile") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
@@ -402,7 +432,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 									Ok(n) =>
 									{
 										assert_eq!(n, usize::try_from(len).unwrap());
-										image_addr = Some(curr_addr + len);
+										image_addr.add(len);
 									},
 									Err(e) =>
 									{
@@ -427,12 +457,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			},
 			ElementValue::Label(name) =>
 			{
-				let Some(curr_addr) = image_addr
-				else
-				{
-					eprintln!("Image address unset for label ({}:{})", element.line, element.col);
-					return false;
-				};
+				image_addr!(let curr_addr = image_addr; print("label") @ (element.line, element.col));
 				let prev = labels.insert(name, curr_addr);
 				if prev.is_some()
 				{
@@ -442,12 +467,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			},
 			ElementValue::Instruction{name, args} =>
 			{
-				let Some(curr_addr) = image_addr
-				else
-				{
-					eprintln!("Image address unset for instruction ({}:{})", element.line, element.col);
-					return false;
-				};
+				image_addr!(let curr_addr = image_addr; print("instruction") @ (element.line, element.col));
 				enum AddrLabel<'l>
 				{
 					Address(Register, Option<ImmReg>),
@@ -925,7 +945,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					Ok(len) =>
 					{
 						space_check!(image_next, curr_addr, len as u32, element.line, element.col);
-						image_addr = Some(curr_addr + len as u32);
+						image_addr.add(len as u32);
 						temp_seg.extend_from_slice(&tmp[..len]);
 					},
 					Err(e) =>
