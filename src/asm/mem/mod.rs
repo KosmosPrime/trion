@@ -32,10 +32,23 @@ impl MemoryRange
 	}
 }
 
-impl fmt::Display for MemoryRange
+macro_rules!mem_fmt
 {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+	($name:ident) =>
 	{
-		write!(f, "{} -> {}", self.first, self.last)
-	}
+		impl fmt::$name for MemoryRange
+		{
+			fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+			{
+				<u32 as fmt::$name>::fmt(&self.first, f)?;
+				f.write_str(" -> ")?;
+				<u32 as fmt::$name>::fmt(&self.last, f)
+			}
+		}
+	};
 }
+mem_fmt!(Display);
+mem_fmt!(UpperHex);
+mem_fmt!(LowerHex);
+mem_fmt!(Octal);
+mem_fmt!(Binary);
