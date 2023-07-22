@@ -1054,8 +1054,43 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			}
 		}
 		
+		// pad all blocks to start on multiples of block size
+		const PAGE_SIZE: usize = 256;
+		if let Some(first) = output.find(0, Search::Above)
+		{
+			const BLANK_PAGE: [u8; PAGE_SIZE] = [0x00; PAGE_SIZE];
+			if first.get_first() % (PAGE_SIZE as u32) > 0
+			{
+				let off = first.get_first() % (PAGE_SIZE as u32);
+				assert_eq!(output.put(first.get_first() - off, &BLANK_PAGE[..off as usize]), Ok(off as usize));
+			}
+			let mut prev = first.get_last();
+			while prev < u32::MAX
+			{
+				if let Some(range) = output.find(prev + 1, Search::Above)
+				{
+					let off = range.get_first() % (PAGE_SIZE as u32);
+					if off > 0
+					{
+						let base = range.get_first() - off;
+						if prev >= base
+						{
+							let cnt = (range.get_first() - prev - 1) as usize;
+							assert_eq!(output.put(prev + 1, &BLANK_PAGE[..cnt as usize]), Ok(cnt));
+						}
+						else
+						{
+							assert_eq!(output.put(base, &BLANK_PAGE[..off as usize]), Ok(off as usize));
+						}
+					}
+					prev = range.get_last();
+				}
+				else {break;}
+			}
+		}
+		
 		buff.clear();
-		let mut dst = Uf2Write::new_vec(Some(0xE48BFF56), 256, 256, buff).unwrap();
+		let mut dst = Uf2Write::new_vec(Some(0xE48BFF56), PAGE_SIZE, PAGE_SIZE, buff).unwrap();
 		for (range, seg) in output.iter()
 		{
 			match dst.write_all(range.get_first(), seg, false)
