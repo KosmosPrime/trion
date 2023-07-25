@@ -899,7 +899,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							}
 						})
 					},
-					"SUBS" => convert!(dst: Register, lhs: Register, rhs: ImmReg {Instruction::Sub{dst, lhs, rhs}}),
+					"SUB" | "SUBS" => convert!(dst: Register, lhs: Register, rhs: ImmReg{Instruction::Sub{flags: temp_str.len() > 3, dst, lhs, rhs}}),
 					"SVC" =>
 					{
 						match convert!(info: Immediate {info})

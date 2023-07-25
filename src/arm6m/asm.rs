@@ -74,7 +74,7 @@ pub enum Instruction
 	Str{src: Register, addr: Register, off: ImmReg},
 	Strb{src: Register, addr: Register, off: ImmReg},
 	Strh{src: Register, addr: Register, off: ImmReg},
-	Sub{dst: Register, lhs: Register, rhs: ImmReg},
+	Sub{flags: bool, dst: Register, lhs: Register, rhs: ImmReg},
 	Svc{info: u8},
 	Sxtb{dst: Register, value: Register},
 	Sxth{dst: Register, value: Register},
@@ -171,7 +171,7 @@ impl Instruction
 				let lhs = Register::try_from(((instr0 >> 3) & 0b111) as u8).unwrap();
 				let rhs = if ((instr0 >> 10) & 1) == 0 {ImmReg::Register(Register::try_from(((instr0 >> 6) & 0b111) as u8).unwrap())}
 				else {ImmReg::Immediate(((instr0 >> 6) & 0b111) as i32)};
-				Ok((2, if ((instr0 >> 9) & 1) == 0 {Self::Add{flags: true, dst, lhs, rhs}} else {Self::Sub{dst, lhs, rhs}}))
+				Ok((2, if ((instr0 >> 9) & 1) == 0 {Self::Add{flags: true, dst, lhs, rhs}} else {Self::Sub{flags: true, dst, lhs, rhs}}))
 			},
 			0b00100 =>
 			{
@@ -191,7 +191,7 @@ impl Instruction
 			0b00111 =>
 			{
 				let dst = Register::try_from(((instr0 >> 8) & 0b111) as u8).unwrap();
-				Ok((2, Self::Sub{dst, lhs: dst, rhs: ImmReg::Immediate(((instr0 >> 0) & 0b11111111) as i32)}))
+				Ok((2, Self::Sub{flags: true, dst, lhs: dst, rhs: ImmReg::Immediate(((instr0 >> 0) & 0b11111111) as i32)}))
 			},
 			0b01000 =>
 			{
@@ -345,7 +345,7 @@ impl Instruction
 					{
 						let rhs = ImmReg::Immediate((((instr0 >> 0) & 0b1111111) as i32) << 2);
 						if ((instr0 >> 7) & 1) == 0 {Ok((2, Self::Add{flags: false, dst: Register::SP, lhs: Register::SP, rhs}))}
-						else {Ok((2, Self::Sub{dst: Register::SP, lhs: Register::SP, rhs}))}
+						else {Ok((2, Self::Sub{flags: false, dst: Register::SP, lhs: Register::SP, rhs}))}
 					},
 					0b001 => Err(ReadError::Undefined{instr0, instr1: None}),
 					0b010 =>
@@ -1119,12 +1119,11 @@ impl Instruction
 				}
 				s(0b0101001_000_000_000 | ((u8::from(off) as u16) << 6) | ((u8::from(addr) as u16) << 3) | ((u8::from(src) as u16) << 0))
 			},
-			
-			Instruction::Sub{dst, lhs, rhs: ImmReg::Immediate(rhs)} =>
+			Instruction::Sub{flags, dst, lhs, rhs: ImmReg::Immediate(rhs)} =>
 			{
 				if lhs == Register::SP
 				{
-					if dst != Register::SP || rhs < 0 || rhs > 0b1111111_00 || (rhs & 0b11) != 0
+					if flags || dst != Register::SP || rhs < 0 || rhs > 0b1111111_00 || (rhs & 0b11) != 0
 					{
 						return Err(WriteError::Unrepresentable);
 					}
@@ -1132,7 +1131,7 @@ impl Instruction
 				}
 				else if dst != lhs
 				{
-					if dst >= Register::R8 || lhs >= Register::R8 || rhs < 0 || rhs > 0b111
+					if !flags || dst >= Register::R8 || lhs >= Register::R8 || rhs < 0 || rhs > 0b111
 					{
 						return Err(WriteError::Unrepresentable);
 					}
@@ -1140,16 +1139,16 @@ impl Instruction
 				}
 				else
 				{
-					if dst >= Register::R8 || rhs < 0 || rhs > 0b11111111
+					if !flags || dst >= Register::R8 || rhs < 0 || rhs > 0b11111111
 					{
 						return Err(WriteError::Unrepresentable);
 					}
 					s(0b00111_000_00000000 | ((u8::from(dst) as u16) << 8) | ((rhs as u16) << 0))
 				}
 			},
-			Instruction::Sub{dst, lhs, rhs: ImmReg::Register(rhs)} =>
+			Instruction::Sub{flags, dst, lhs, rhs: ImmReg::Register(rhs)} =>
 			{
-				if dst >= Register::R8 || lhs >= Register::R8 || rhs >= Register::R8
+				if !flags || dst >= Register::R8 || lhs >= Register::R8 || rhs >= Register::R8
 				{
 					return Err(WriteError::Unrepresentable);
 				}
@@ -1360,7 +1359,7 @@ impl fmt::Display for InstrAt
 			Instruction::Str{src, addr, off} => write!(f, "STR {src}, [{addr} + {off}];"),
 			Instruction::Strb{src, addr, off} => write!(f, "STRB {src}, [{addr} + {off}];"),
 			Instruction::Strh{src, addr, off} => write!(f, "STRH {src}, [{addr} + {off}];"),
-			Instruction::Sub{dst, lhs, rhs} => write!(f, "SUB{} {dst}, {lhs}, {rhs};", if dst < Register::R8 {"S"} else {""}),
+			Instruction::Sub{flags, dst, lhs, rhs} => write!(f, "SUB{} {dst}, {lhs}, {rhs};", if flags {"S"} else {""}),
 			Instruction::Svc{info} => write!(f, "SVC {info};"),
 			Instruction::Sxtb{dst, value} => write!(f, "SXTB {dst}, {value};"),
 			Instruction::Sxth{dst, value} => write!(f, "SXTH {dst}, {value};"),
