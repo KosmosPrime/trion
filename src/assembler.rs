@@ -554,7 +554,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("Argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected register ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -576,7 +576,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("Argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected register ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -609,7 +609,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("Argument {}: expected immediate ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected immediate or register ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
@@ -678,7 +678,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 							_ =>
 							{
-								eprintln!("Argument {}: expected address ({}:{})", arg_pos + 1, element.line, element.col);
+								eprintln!("Argument {}: expected address or label ({}:{})", arg_pos + 1, element.line, element.col);
 								return false;
 							},
 						}
