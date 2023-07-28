@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::Path;
@@ -8,8 +7,9 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
+use crate::asm::Context;
 use crate::asm::mem::MemoryRange;
-use crate::asm::mem::map::{MemoryMap, Search};
+use crate::asm::mem::map::Search;
 use crate::text::parse::{Argument, ElementValue, Parser};
 use crate::text::token::Number;
 use crate::uf2::write::Uf2Write;
@@ -21,12 +21,14 @@ macro_rules!print_err
 	{
 		{
 			use std::error::Error;
-			eprint!($($print),+);
-			eprintln!(": {}", $err);
+			use std::io::Write;
+			let mut stderr = std::io::stderr().lock();
+			write!(stderr, $($print),+).unwrap();
+			write!(stderr, ": {}\n", $err).unwrap();
 			let mut source = $err.source();
 			while let Some(src) = source
 			{
-				eprintln!("\tsource: {src}");
+				write!(stderr, "\tsource: {src}\n").unwrap();
 				source = src.source();
 			}
 		}
@@ -35,71 +37,35 @@ macro_rules!print_err
 
 macro_rules!space_check
 {
-	($next:expr, $curr:expr, $need:expr, $line:expr, $col:expr) =>
+	($ctx:ident, $active:ident, $need:expr, $line:expr, $col:expr) =>
 	{
-		match $next
+		if !$active.has_remaining($need)
 		{
-			Some(next) if next - $curr < $need =>
-			{
-				eprintln!("Segment overflow at {:08X} ({}:{})", $curr, $line, $col);
-				return false;
-			},
-			_ => (),
+			eprintln!("Segment overflow at {:08X} ({}:{})", $active.curr_addr(), $line, $col);
+			$ctx.set_errored();
+			return false;
 		}
 	};
 }
 
-enum ImageAddress
+macro_rules!get_active
 {
-	Initial, Value(u32), Overflow,
-}
-
-impl ImageAddress
-{
-	fn add(&mut self, n: u32)
-	{
-		match self
-		{
-			Self::Initial => panic!("not initialized"),
-			Self::Value(v) =>
-			{
-				*self = match v.checked_add(n)
-				{
-					None => Self::Overflow,
-					Some(r) => Self::Value(r),
-				};
-			},
-			Self::Overflow => panic!("address overflow"),
-		}
-	}
-}
-
-macro_rules!image_addr
-{
-	(let $dst:ident = $src:ident; print($($print:expr),+) @ ($line:expr, $col:expr)) =>
+	(let $dst:ident = $ctx:ident; print($($print:expr),+) @ ($line:expr, $col:expr)) =>
 	{
 		// stderr simply uses unwrap because failing to print to stderr means whatever message won't go through
-		let $dst = match $src
+		let $dst = match $ctx.active_mut()
 		{
-			ImageAddress::Initial =>
+			None =>
 			{
 				use std::io::Write;
 				let mut stderr = std::io::stderr().lock();
 				write!(stderr, "Image address unset for ").unwrap();
 				write!(stderr, $($print),+).unwrap();
 				write!(stderr, " ({}:{})\n", $line, $col).unwrap();
+				$ctx.set_errored();
 				return false;
 			},
-			ImageAddress::Value(v) => v,
-			ImageAddress::Overflow =>
-			{
-				use std::io::Write;
-				let mut stderr = std::io::stderr().lock();
-				write!(stderr, "Address overflow at ").unwrap();
-				write!(stderr, $($print),+).unwrap();
-				write!(stderr, " ({}:{})\n", $line, $col).unwrap();
-				return false;
-			},
+			Some(v) => v,
 		};
 	};
 }
@@ -107,14 +73,8 @@ macro_rules!image_addr
 pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 {
 	let base = path.parent().unwrap();
-	let mut output = MemoryMap::new();
-	let mut temp_base = 0u32;
-	let mut temp_seg = Vec::new();
-	let mut image_addr = ImageAddress::Initial;
-	let mut image_next: Option<u32> = None;
+	let mut ctx = Context::new();
 	let mut temp_str = String::new();
-	let mut labels = HashMap::new();
-	let mut deferred = Vec::new();
 	
 	for element in Parser::new(buff.as_ref())
 	{
@@ -161,31 +121,15 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								return false;
 							},
 						};
-						if !temp_seg.is_empty()
+						if let Err(e) = ctx.change_segment(tgt)
 						{
-							if let Err(e) = output.put(temp_base, temp_seg.as_slice())
-							{
-								print_err!(e, "Segment write error ({}:{})", element.line, element.col);
-								return false;
-							}
+							print_err!(e, "Could change address to {tgt:08X} ({}:{})", element.line, element.col);
+							return false;
 						}
-						let next = output.find(tgt, Search::Above);
-						if let Some(range) = next
-						{
-							if tgt >= range.get_first()
-							{
-								eprintln!("Address {tgt:08X} already exists ({}:{})", element.line, element.col);
-								return false;
-							}
-						}
-						temp_seg.clear();
-						temp_base = tgt;
-						image_addr = ImageAddress::Value(tgt);
-						image_next = next.map(|r| r.get_first());
 					},
 					"align" =>
 					{
-						image_addr!(let curr_addr = image_addr; print(".align") @ (element.line, element.col));
+						get_active!(let active = ctx; print(".align") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("Align requires exactly one argument ({}:{})", element.line, element.col);
@@ -213,16 +157,27 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							eprintln!("Alignment out of range ({}:{})", element.line, element.col);
 							return false;
 						}
-						let off = curr_addr % len;
+						let off = active.curr_addr() % len;
 						if off != 0
 						{
 							match usize::try_from(len - off)
 							{
 								Ok(new_len) =>
 								{
-									space_check!(image_next, curr_addr, len - off, element.line, element.col);
-									image_addr.add(len - off);
-									temp_seg.resize(temp_seg.len() + new_len, 0xBE); // BKPT
+									const PADDING: [u8; 256] = [0xBE; 256];
+									
+									space_check!(ctx, active, new_len, element.line, element.col);
+									for p in (0..new_len).step_by(256)
+									{
+										if new_len - p >= 256
+										{
+											active.write(&PADDING).unwrap();
+										}
+										else
+										{
+											active.write(&PADDING[..new_len - p]).unwrap();
+										}
+									}
 								},
 								Err(..) =>
 								{
@@ -234,12 +189,12 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 					"du8" | "du16" | "du32" =>
 					{
-						image_addr!(let curr_addr = image_addr; print(".{name}") @ (element.line, element.col));
-						let (min, max, n) = match name
+						get_active!(let active = ctx; print(".{name}") @ (element.line, element.col));
+						let (min, max) = match name
 						{
-							"du8" => (u8::MIN as i64, u8::MAX as i64, 1),
-							"du16" => (u16::MIN as i64, u16::MAX as i64, 2),
-							"du32" => (u32::MIN as i64, u32::MAX as i64, 4),
+							"du8" => (u8::MIN as i64, u8::MAX as i64),
+							"du16" => (u16::MIN as i64, u16::MAX as i64),
+							"du32" => (u32::MIN as i64, u32::MAX as i64),
 							_ => unreachable!(),
 						};
 						if args.len() != 1
@@ -265,30 +220,22 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 							},
 						};
 						
-						space_check!(image_next, curr_addr, n, element.line, element.col);
-						match name
+						let result = match name
 						{
-							"du8" =>
-							{
-								image_addr.add(u32::try_from(core::mem::size_of::<u8>()).unwrap());
-								temp_seg.push(val as u8);
-							},
-							"du16" =>
-							{
-								image_addr.add(u32::try_from(core::mem::size_of::<u16>()).unwrap());
-								temp_seg.extend_from_slice(&u16::to_le_bytes(val as u16));
-							},
-							"du32" =>
-							{
-								image_addr.add(u32::try_from(core::mem::size_of::<u32>()).unwrap());
-								temp_seg.extend_from_slice(&u32::to_le_bytes(val as u32));
-							},
+							"du8" => active.write(core::slice::from_ref(&(val as u8))),
+							"du16" => active.write(&u16::to_le_bytes(val as u16)),
+							"du32" => active.write(&u32::to_le_bytes(val as u32)),
 							_ => unreachable!(),
+						};
+						if let Err(e) = result
+						{
+							print_err!(e, "Could not write constant ({}, {})", element.line, element.col);
+							return false;
 						}
 					},
 					"dhex" =>
 					{
-						image_addr!(let curr_addr = image_addr; print(".dhex") @ (element.line, element.col));
+						get_active!(let active = ctx; print(".dhex") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
@@ -338,24 +285,15 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								return false;
 							},
 						};
-						match u32::try_from(val.len())
+						if let Err(e) = active.write(val.as_slice())
 						{
-							Ok(n) if n <= u32::MAX - curr_addr =>
-							{
-								space_check!(image_next, curr_addr, n, element.line, element.col);
-								image_addr.add(n);
-							},
-							_ =>
-							{
-								eprintln!("Hex blob too long ({}:{})", element.line, element.col);
-								return false;
-							},
+							print_err!(e, "Could not write hex blob ({}:{})", element.line, element.col);
+							return false;
 						}
-						temp_seg.extend_from_slice(val.as_ref());
 					},
 					"dstr" =>
 					{
-						image_addr!(let curr_addr = image_addr; print(".dstr") @ (element.line, element.col));
+						get_active!(let active = ctx; print(".dstr") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
@@ -370,24 +308,15 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								return false;
 							},
 						};
-						match u32::try_from(val.len())
+						if let Err(e) = active.write(val)
 						{
-							Ok(n) if n <= u32::MAX - curr_addr =>
-							{
-								space_check!(image_next, curr_addr, n, element.line, element.col);
-								image_addr.add(n);
-							},
-							_ =>
-							{
-								eprintln!("Hex blob too long ({}:{})", element.line, element.col);
-								return false;
-							},
+							print_err!(e, "Could not write string ({}:{})", element.line, element.col);
+							return false;
 						}
-						temp_seg.extend_from_slice(val);
 					},
 					"dfile" =>
 					{
-						image_addr!(let curr_addr = image_addr; print(".dfile") @ (element.line, element.col));
+						get_active!(let active = ctx; print(".dfile") @ (element.line, element.col));
 						if args.len() != 1
 						{
 							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
@@ -412,13 +341,15 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								{
 									Ok(meta) =>
 									{
-										if meta.len() > (u32::MAX - curr_addr) as u64 || usize::try_from(meta.len()).is_err()
+										match usize::try_from(meta.len())
 										{
-											eprintln!("File too long ({}:{})", element.line, element.col);
-											return false;
+											Ok(len) => len,
+											Err(..) =>
+											{
+												eprintln!("File too long ({}:{})", element.line, element.col);
+												return false;
+											},
 										}
-										// `meta.len()` fits into an u32 because of the first comparison
-										meta.len() as u32
 									},
 									Err(e) =>
 									{
@@ -426,20 +357,46 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 										return false;
 									},
 								};
-								space_check!(image_next, curr_addr, len, element.line, element.col);
-								match f.read_to_end(&mut temp_seg)
+								space_check!(ctx, active, len, element.line, element.col);
+								
+								let mut pos = 0;
+								let mut temp = [0u8; 1024];
+								while pos < len
 								{
-									Ok(n) =>
+									match f.read(&mut temp)
 									{
-										assert_eq!(n, usize::try_from(len).unwrap());
-										image_addr.add(len);
-									},
-									Err(e) =>
-									{
-										print_err!(e, "Could not read file {path:?} ({}:{})", element.line, element.col);
-										return false;
-									},
+										Ok(cnt) =>
+										{
+											if len - pos < cnt
+											{
+												if let Err(e) = active.write(&temp[..len - pos])
+												{
+													print_err!(e, "Could not write file data at {pos} ({}:{})", element.line, element.col);
+													return false;
+												}
+												// no need to update pos again
+												//pos = len;
+												break;
+											}
+											else
+											{
+												if let Err(e) = active.write(&temp[..cnt])
+												{
+													print_err!(e, "Could not write file data at {pos} ({}:{})", element.line, element.col);
+													return false;
+												}
+												pos += cnt;
+											}
+										},
+										Err(e) =>
+										{
+											print_err!(e, "Could not read file {path:?} ({}:{})", element.line, element.col);
+											return false;
+										},
+									}
 								}
+								// reading less than expected is fine
+								drop(f);
 							},
 							Err(e) =>
 							{
@@ -457,8 +414,9 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			},
 			ElementValue::Label(name) =>
 			{
-				image_addr!(let curr_addr = image_addr; print("label") @ (element.line, element.col));
-				let prev = labels.insert(name, curr_addr);
+				get_active!(let active = ctx; print("label") @ (element.line, element.col));
+				let curr_addr = active.curr_addr();
+				let prev = ctx.labels_mut().insert(name.to_owned(), curr_addr);
 				if prev.is_some()
 				{
 					eprintln!("Duplicate label {name} ({}:{})", element.line, element.col);
@@ -467,7 +425,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			},
 			ElementValue::Instruction{name, args} =>
 			{
-				image_addr!(let curr_addr = image_addr; print("instruction") @ (element.line, element.col));
+				get_active!(let active = ctx; print("instruction") @ (element.line, element.col));
 				enum AddrLabel<'l>
 				{
 					Address(Register, Option<ImmReg>),
@@ -688,6 +646,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				temp_str.clear();
 				temp_str.push_str(name);
 				temp_str.make_ascii_uppercase(); // REM lowercase for consistency with directives
+				let mut defer_label = None;
 				let instr = match temp_str.as_ref()
 				{
 					"ADCS" => convert!(dst: Register, rhs: Register {Instruction::Adc{dst, rhs}}),
@@ -696,7 +655,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					{
 						let (dst, label) = convert!(dst: Register, label: Identifier {(dst, label)});
 						let instr = Instruction::Adr{dst, off: 0};
-						deferred.push((element.line, element.col, curr_addr, instr, label));
+						defer_label = Some(label);
 						instr
 					},
 					"ANDS" => convert!(dst: Register, rhs: Register {Instruction::And{dst, rhs}}),
@@ -726,7 +685,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						};
 						let label = convert!(label: Identifier {label});
 						let instr = Instruction::B{cond, off: 0};
-						deferred.push((element.line, element.col, curr_addr, instr, label));
+						defer_label = Some(label);
 						instr
 					},
 					"BIC" => convert!(dst: Register, rhs: Register {Instruction::And{dst, rhs}}),
@@ -746,7 +705,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					{
 						let label = convert!(label: Identifier {label});
 						let instr = Instruction::Bl{off: 0};
-						deferred.push((element.line, element.col, curr_addr, instr, label));
+						defer_label = Some(label);
 						instr
 					},
 					"BLX" => convert!(off: Register {Instruction::Blx{off}}),
@@ -814,7 +773,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								AddrLabel::Label(label) =>
 								{
 									let instr = Instruction::Ldr{dst, addr: Register::PC, off: ImmReg::Immediate(0)};
-									deferred.push((element.line, element.col, curr_addr, instr, label));
+									defer_label = Some(label);
 									instr
 								},
 							}
@@ -935,45 +894,52 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					"YIELD" => convert!({Instruction::Yield}),
 					_ =>
 					{
-						eprintln!("No such instruction {temp_str}");
+						eprintln!("No such instruction {temp_str} ({}:{})", element.line, element.col);
 						return false;
 					},
 				};
 				let mut tmp = [0u8; 4];
+				let curr_addr = active.curr_addr();
 				match instr.write(&mut tmp)
 				{
 					Ok(len) =>
 					{
-						space_check!(image_next, curr_addr, len as u32, element.line, element.col);
-						image_addr.add(len as u32);
-						temp_seg.extend_from_slice(&tmp[..len]);
+						if let Err(e) = active.write(&tmp[..len])
+						{
+							print_err!(e, "Instruction write failed ({}:{})", element.line, element.col);
+							return false;
+						}
 					},
 					Err(e) =>
 					{
-						print_err!(e, "Encoding failed ({}:{})", element.line, element.col);
+						print_err!(e, "Instruction encoding failed ({}:{})", element.line, element.col);
 						return false;
 					},
+				}
+				if let Some(label) = defer_label
+				{
+					let (line, col) = (element.line, element.col);
+					let label = label.to_owned();
+					ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, line, col, curr_addr, instr, label.as_str())));
 				}
 			},
 		}
 	}
-	if !temp_seg.is_empty()
+	if let Err(e) = ctx.close_segment()
 	{
-		if let Err(e) = output.put(temp_base, temp_seg.as_slice())
-		{
-			print_err!(e, "Segment write error (eof)");
-			return false;
-		}
+		print_err!(e, "Could not close final segment");
+		return false;
 	}
 	
-	for (line, col, addr, mut instr, label) in deferred
+	fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: Instruction, label: &str)
 	{
-		let tgt = match labels.get(label)
+		let tgt = match ctx.labels().get(label)
 		{
 			None =>
 			{
 				eprintln!("No such label {label:?} ({line}:{col})");
-				return false;
+				ctx.set_errored();
+				return;
 			},
 			Some(&t) => t,
 		};
@@ -986,12 +952,14 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				if tgt < al_pc || tgt - al_pc > u16::MAX as u32
 				{
 					eprintln!("Label out of range ({line}:{col})");
-					return false;
+					ctx.set_errored();
+					return;
 				}
 				if ((tgt - al_pc) & 0b11) != 0
 				{
 					eprintln!("Misaligned label ({line}:{col})");
-					return false;
+					ctx.set_errored();
+					return;
 				}
 				*off = (tgt - al_pc) as u16;
 			},
@@ -1005,7 +973,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				else
 				{
 					eprintln!("Label out of range ({line}:{col})");
-					return false;
+					ctx.set_errored();
 				}
 			},
 			Instruction::Ldr{addr: Register::PC, off, ..} =>
@@ -1014,12 +982,14 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				if tgt < al_pc || tgt - al_pc > i32::MAX as u32
 				{
 					eprintln!("Label out of range ({line}:{col})");
-					return false;
+					ctx.set_errored();
+					return;
 				}
 				if ((tgt - al_pc) & 0b11) != 0
 				{
 					eprintln!("Misaligned label ({line}:{col})");
-					return false;
+					ctx.set_errored();
+					return;
 				}
 				*off = ImmReg::Immediate((tgt - al_pc) as i32);
 			},
@@ -1031,30 +1001,32 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 		{
 			Ok(len) =>
 			{
-				if let Err(e) = output.put(addr, &tmp[..len])
+				if let Err(e) = ctx.output_mut().put(addr, &tmp[..len])
 				{
 					print_err!(e, "Late instruction write failed ({}:{})", line, col);
-					return false;
+					ctx.set_errored();
 				}
 			},
 			Err(e) =>
 			{
-				print_err!(e, "Late encoding failed ({}:{})", line, col);
-				return false;
+				print_err!(e, "Late instruction encoding failed ({}:{})", line, col);
+				ctx.set_errored();
 			},
 		}
 	}
 	
-	if output.len() > 0
+	ctx.run_tasks();
+	if ctx.has_errored() {return false;}
+	if ctx.output().len() > 0
 	{
 		const FLASH_BASE: u32 = 0x10000000;
 		const FLASH_CRC: u32 = FLASH_BASE + 0xFC;
 		// use `Search::Exact` because if code doesn't start right here it's not bootable
-		if output.find(FLASH_BASE, Search::Exact).is_some()
+		if ctx.output().find(FLASH_BASE, Search::Exact).is_some()
 		{
 			let mut temp = [0u8; 0xFC];
 			// also search in the space the CRC goes to find existing data we can't overwrite
-			for (range, data) in output.iter_range(MemoryRange::new(FLASH_BASE, FLASH_BASE + 0xFF))
+			for (range, data) in ctx.output().iter_range(MemoryRange::new(FLASH_BASE, FLASH_BASE + 0xFF))
 			{
 				if range.get_last() >= FLASH_CRC
 				{
@@ -1067,7 +1039,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			}
 			let mut crc = Crc::new();
 			crc.update_slice(&temp[..0xFC]);
-			if let Err(e) = output.put(FLASH_CRC, &u32::to_le_bytes(crc.get_value()))
+			if let Err(e) = ctx.output_mut().put(FLASH_CRC, &u32::to_le_bytes(crc.get_value()))
 			{
 				print_err!(e, "Checksum write failed");
 				return false;
@@ -1076,18 +1048,18 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 		
 		// pad all blocks to start on multiples of block size
 		const PAGE_SIZE: usize = 256;
-		if let Some(first) = output.find(0, Search::Above)
+		if let Some(first) = ctx.output().find(0, Search::Above)
 		{
 			const BLANK_PAGE: [u8; PAGE_SIZE] = [0x00; PAGE_SIZE];
 			if first.get_first() % (PAGE_SIZE as u32) > 0
 			{
 				let off = first.get_first() % (PAGE_SIZE as u32);
-				assert_eq!(output.put(first.get_first() - off, &BLANK_PAGE[..off as usize]), Ok(off as usize));
+				assert_eq!(ctx.output_mut().put(first.get_first() - off, &BLANK_PAGE[..off as usize]), Ok(off as usize));
 			}
 			let mut prev = first.get_last();
 			while prev < u32::MAX
 			{
-				if let Some(range) = output.find(prev + 1, Search::Above)
+				if let Some(range) = ctx.output().find(prev + 1, Search::Above)
 				{
 					let off = range.get_first() % (PAGE_SIZE as u32);
 					if off > 0
@@ -1096,11 +1068,11 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 						if prev >= base
 						{
 							let cnt = (range.get_first() - prev - 1) as usize;
-							assert_eq!(output.put(prev + 1, &BLANK_PAGE[..cnt as usize]), Ok(cnt));
+							assert_eq!(ctx.output_mut().put(prev + 1, &BLANK_PAGE[..cnt as usize]), Ok(cnt));
 						}
 						else
 						{
-							assert_eq!(output.put(base, &BLANK_PAGE[..off as usize]), Ok(off as usize));
+							assert_eq!(ctx.output_mut().put(base, &BLANK_PAGE[..off as usize]), Ok(off as usize));
 						}
 					}
 					prev = range.get_last();
@@ -1111,7 +1083,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 		
 		buff.clear();
 		let mut dst = Uf2Write::new_vec(Some(0xE48BFF56), PAGE_SIZE, PAGE_SIZE, buff).unwrap();
-		for (range, seg) in output.iter()
+		for (range, seg) in ctx.output().iter()
 		{
 			match dst.write_all(range.get_first(), seg, false)
 			{
