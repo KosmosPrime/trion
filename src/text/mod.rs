@@ -13,6 +13,20 @@ pub struct Positioned<T>
 	pub col: u32,
 }
 
+impl<T> Positioned<T>
+{
+	pub fn convert<R>(&self, value: R) -> Positioned<R>
+	{
+		Positioned{value, line: self.line, col: self.col}
+	}
+	
+	pub fn convert_fn<R>(self, func: impl FnOnce(T) -> R) -> Positioned<R>
+	{
+		let Positioned{value, line, col} = self;
+		Positioned{value: func(value), line, col}
+	}
+}
+
 impl<T: fmt::Display> fmt::Display for Positioned<T>
 {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result

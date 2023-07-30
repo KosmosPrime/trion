@@ -4,6 +4,7 @@ use std::error::Error;
 
 use crate::asm::mem::map::{MemoryMap, PutError, Search};
 
+pub mod directive;
 pub mod mem;
 
 pub struct Context

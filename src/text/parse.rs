@@ -27,6 +27,64 @@ pub enum Argument<'l>
 	Function{name: &'l str, args: Vec<Argument<'l>>},
 }
 
+impl<'l> Argument<'l>
+{
+	pub fn get_type(&self) -> ArgumentType
+	{
+		match self
+		{
+			Self::Constant(..) => ArgumentType::Constant,
+			Self::Identifier(..) => ArgumentType::Identifier,
+			Self::String(..) => ArgumentType::String,
+			Self::Add(..) => ArgumentType::Add,
+			Self::Subtract(..) => ArgumentType::Subtract,
+			Self::Multiply(..) => ArgumentType::Multiply,
+			Self::Not(..) => ArgumentType::Not,
+			Self::And(..) => ArgumentType::And,
+			Self::Or(..) => ArgumentType::Or,
+			Self::ExclusiveOr(..) => ArgumentType::ExclusiveOr,
+			Self::LeftShift{..} => ArgumentType::LeftShift,
+			Self::RightShift{..} => ArgumentType::RightShift,
+			Self::Address(..) => ArgumentType::Address,
+			Self::Sequence(..) => ArgumentType::Sequence,
+			Self::Function{..} => ArgumentType::Function,
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ArgumentType
+{
+	Constant, Identifier, String,
+	Add, Subtract, Multiply, Not, And, Or, ExclusiveOr, LeftShift, RightShift,
+	Address, Sequence, Function,
+}
+
+impl fmt::Display for ArgumentType
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+	{
+		match self
+		{
+			Self::Constant => f.write_str("constant"),
+			Self::Identifier => f.write_str("identifier"),
+			Self::String => f.write_str("string"),
+			Self::Add => f.write_str("addition"),
+			Self::Subtract => f.write_str("subtraction"),
+			Self::Multiply => f.write_str("multiplication"),
+			Self::Not => f.write_str("binary not"),
+			Self::And => f.write_str("binary and"),
+			Self::Or => f.write_str("binary or"),
+			Self::ExclusiveOr => f.write_str("binary xor"),
+			Self::LeftShift => f.write_str("left shift"),
+			Self::RightShift => f.write_str("right shift"),
+			Self::Address => f.write_str("address"),
+			Self::Sequence => f.write_str("sequence"),
+			Self::Function => f.write_str("function call"),
+		}
+	}
+}
+
 pub type Element<'l> = Positioned<ElementValue<'l>>;
 
 #[derive(Clone, Debug)]
