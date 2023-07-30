@@ -26,19 +26,12 @@ impl DirectiveList
 		}
 	}
 	
-	pub fn process(&self, ctx: &mut Context, contents: Positioned<(&str, &[Argument])>) -> Result<(), DirectiveError>
+	pub fn process<'c>(&self, ctx: &'c mut Context, contents: Positioned<(&str, &[Argument])>) -> Result<(), &'c DirectiveError>
 	{
 		match self.0.get(contents.value.0)
 		{
-			None =>
-			{
-				ctx.set_errored();
-				Err(contents.convert_fn(|v| DirectiveErrorKind::NotFound(v.0.to_owned())))
-			},
-			Some(directive) =>
-			{
-				directive.apply(ctx, contents.convert_fn(|v| v.1))
-			},
+			None => Err(ctx.push_error(contents.convert_fn(|v| DirectiveErrorKind::NotFound(v.0.to_owned())))),
+			Some(directive) => directive.apply(ctx, contents.convert_fn(|v| v.1)),
 		}
 	}
 }
@@ -47,7 +40,7 @@ pub trait Directive: fmt::Debug
 {
 	fn get_name(&self) -> &str;
 	
-	fn apply(&self, ctx: &mut Context, args: Positioned<&[Argument]>) -> Result<(), DirectiveError>;
+	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), &'c DirectiveError>;
 }
 
 pub type DirectiveError = Positioned<DirectiveErrorKind>;

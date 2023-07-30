@@ -7,7 +7,7 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
-use crate::asm::Context;
+use crate::asm::{Context, LabelError};
 use crate::asm::mem::MemoryRange;
 use crate::asm::mem::map::Search;
 use crate::text::parse::{Argument, ElementValue, Parser};
@@ -42,7 +42,6 @@ macro_rules!space_check
 		if !$active.has_remaining($need)
 		{
 			eprintln!("Segment overflow at {:08X} ({}:{})", $active.curr_addr(), $line, $col);
-			$ctx.set_errored();
 			return false;
 		}
 	};
@@ -62,7 +61,6 @@ macro_rules!get_active
 				write!(stderr, "Image address unset for ").unwrap();
 				write!(stderr, $($print),+).unwrap();
 				write!(stderr, " ({}:{})\n", $line, $col).unwrap();
-				$ctx.set_errored();
 				return false;
 			},
 			Some(v) => v,
@@ -938,60 +936,77 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 			None =>
 			{
 				eprintln!("No such label {label:?} ({line}:{col})");
-				ctx.set_errored();
+				ctx.push_error(LabelError::NotFound(label.to_owned()));
 				return;
 			},
 			Some(&t) => t,
 		};
 		
-		match &mut instr
+		match instr
 		{
-			Instruction::Adr{off, ..} =>
+			Instruction::Adr{ref mut off, ..} =>
 			{
 				let al_pc = (addr & !0b11).wrapping_add(4);
-				if tgt < al_pc || tgt - al_pc > u16::MAX as u32
+				if tgt < al_pc || tgt - al_pc > 0xFF << 2
 				{
 					eprintln!("Label out of range ({line}:{col})");
-					ctx.set_errored();
-					return;
+					ctx.push_error(LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
 				}
-				if ((tgt - al_pc) & 0b11) != 0
+				else if ((tgt - al_pc) & 0b11) != 0
 				{
 					eprintln!("Misaligned label ({line}:{col})");
-					ctx.set_errored();
-					return;
+					ctx.push_error(LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
 				}
-				*off = (tgt - al_pc) as u16;
+				else {*off = (tgt - al_pc) as u16;}
 			},
-			Instruction::B{off, ..} | Instruction::Bl{off} =>
+			Instruction::B{cond, ref mut off} =>
 			{
 				let pc = addr.wrapping_add(4);
-				if let Ok(diff) = i32::try_from(i64::from(tgt) - i64::from(pc))
-				{
-					*off = diff;
-				}
-				else
+				let off_val = i64::from(tgt) - i64::from(pc);
+				let (min, max) = if cond == Condition::Always {(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
+				if off_val < min || off_val > max
 				{
 					eprintln!("Label out of range ({line}:{col})");
-					ctx.set_errored();
+					ctx.push_error(LabelError::Range{min, max, have: off_val});
 				}
-			},
-			Instruction::Ldr{addr: Register::PC, off, ..} =>
-			{
-				let al_pc = (addr & !0b11).wrapping_add(4);
-				if tgt < al_pc || tgt - al_pc > i32::MAX as u32
-				{
-					eprintln!("Label out of range ({line}:{col})");
-					ctx.set_errored();
-					return;
-				}
-				if ((tgt - al_pc) & 0b11) != 0
+				else if (off_val & 0b1) != 0
 				{
 					eprintln!("Misaligned label ({line}:{col})");
-					ctx.set_errored();
-					return;
+					ctx.push_error(LabelError::Alignment{align: 0b10, have: off_val});
 				}
-				*off = ImmReg::Immediate((tgt - al_pc) as i32);
+				else {*off = off_val as i32}
+			},
+			Instruction::Bl{ref mut off} =>
+			{
+				let pc = addr.wrapping_add(4);
+				let off_val = i64::from(tgt) - i64::from(pc);
+				let (min, max) = (-1 << 24, (1 << 24) - 1);
+				if off_val < min || off_val > max
+				{
+					eprintln!("Label out of range ({line}:{col})");
+					ctx.push_error(LabelError::Range{min, max, have: off_val});
+				}
+				else if (off_val & 0b1) != 0
+				{
+					eprintln!("Misaligned label ({line}:{col})");
+					ctx.push_error(LabelError::Alignment{align: 0b10, have: off_val});
+				}
+				else {*off = off_val as i32}
+			},
+			Instruction::Ldr{addr: Register::PC, ref mut off, ..} =>
+			{
+				let al_pc = (addr & !0b11).wrapping_add(4);
+				if tgt < al_pc || tgt - al_pc > 0xFF << 2
+				{
+					eprintln!("Label out of range ({line}:{col})");
+					ctx.push_error(LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
+				}
+				else if ((tgt - al_pc) & 0b11) != 0
+				{
+					eprintln!("Misaligned label ({line}:{col})");
+					ctx.push_error(LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
+				}
+				else {*off = ImmReg::Immediate((tgt - al_pc) as i32);}
 			},
 			_ => unreachable!("missing deferred handler for {instr:?}"),
 		}
@@ -1004,13 +1019,13 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 				if let Err(e) = ctx.output_mut().put(addr, &tmp[..len])
 				{
 					print_err!(e, "Late instruction write failed ({}:{})", line, col);
-					ctx.set_errored();
+					ctx.push_error(e);
 				}
 			},
 			Err(e) =>
 			{
 				print_err!(e, "Late instruction encoding failed ({}:{})", line, col);
-				ctx.set_errored();
+				ctx.push_error(e);
 			},
 		}
 	}

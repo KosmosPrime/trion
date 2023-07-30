@@ -9,11 +9,11 @@ pub mod mem;
 
 pub struct Context
 {
-	errored: bool,
 	output: MemoryMap,
 	active: Segment,
 	labels: HashMap<String, u32>,
 	tasks: Vec<Box<dyn FnOnce(&mut Context)>>,
+	errors: Vec<Box<dyn Error + 'static>>,
 }
 
 impl Context
@@ -22,22 +22,12 @@ impl Context
 	{
 		Self
 		{
-			errored: false,
 			output: MemoryMap::new(),
 			active: Segment::Inactive(Vec::new()),
 			labels: HashMap::new(),
 			tasks: Vec::new(),
+			errors: Vec::new(),
 		}
-	}
-	
-	pub fn has_errored(&self) -> bool
-	{
-		self.errored
-	}
-	
-	pub fn set_errored(&mut self)
-	{
-		self.errored = true;
 	}
 	
 	pub fn output(&self) -> &MemoryMap
@@ -133,6 +123,22 @@ impl Context
 			task(self);
 		}
 	}
+	
+	pub fn has_errored(&self) -> bool
+	{
+		!self.errors.is_empty()
+	}
+	
+	pub fn push_error<T: Error + 'static>(&mut self, error: T) -> &T
+	{
+		self.errors.push(Box::new(error));
+		self.errors.last().unwrap().as_ref().downcast_ref().unwrap()
+	}
+	
+	pub fn get_errors(&self) -> &[Box<dyn Error>]
+	{
+		self.errors.as_ref()
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -216,9 +222,14 @@ impl ActiveSegment
 		self.base_addr.saturating_add(self.buffer.len() as u32)
 	}
 	
+	pub fn remaining(&self) -> usize
+	{
+		self.max_len - self.buffer.len()
+	}
+	
 	pub fn has_remaining(&self, len: usize) -> bool
 	{
-		len <= self.max_len - self.buffer.len()
+		len <= self.remaining()
 	}
 	
 	pub fn write(&mut self, data: &[u8]) -> Result<(), WriteError>
@@ -230,7 +241,7 @@ impl ActiveSegment
 		}
 		else
 		{
-			Err(WriteError::Overflow{need: data.len(), have: self.max_len - self.buffer.len()})
+			Err(WriteError::Overflow{need: data.len(), have: self.remaining()})
 		}
 	}
 }
@@ -253,3 +264,26 @@ impl fmt::Display for WriteError
 }
 
 impl Error for WriteError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LabelError
+{
+	NotFound(String),
+	Range{min: i64, max: i64, have: i64},
+	Alignment{align: u32, have: i64},
+}
+
+impl fmt::Display for LabelError
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+	{
+		match self
+		{
+			Self::NotFound(name) => write!(f, "no such label {:?}", name),
+			Self::Range{min, max, have} => write!(f, "label out of range ({min} to {max}, got {have})"),
+			Self::Alignment{align, have} => write!(f, "misaligned label (expect {align}, got {have})"),
+		}
+	}
+}
+
+impl Error for LabelError {}
