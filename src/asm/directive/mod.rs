@@ -8,6 +8,7 @@ use crate::text::parse::{Argument, ArgumentType};
 
 pub mod addr;
 pub mod align;
+pub mod data;
 
 #[derive(Debug)]
 pub struct DirectiveList(HashMap<String, Box<dyn Directive>>);
