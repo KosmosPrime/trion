@@ -6,6 +6,8 @@ use crate::asm::Context;
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 
+pub mod addr;
+
 #[derive(Debug)]
 pub struct DirectiveList(HashMap<String, Box<dyn Directive>>);
 
