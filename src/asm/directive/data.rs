@@ -1,5 +1,7 @@
 use core::fmt;
 use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::{self, Read};
 
 use crate::asm::{Context, WriteError};
 use crate::asm::directive::{Directive, DirectiveError, DirectiveErrorKind};
@@ -120,6 +122,80 @@ generate!
 	}
 }
 generate!(DataStr(String) as "dstr" => |ctx, active, args, value| {active.write(value.as_bytes())});
+generate!
+{
+	DataFile(String) as "dfile" => |ctx, _active, args, path|
+	{
+		let mut path_buff = ctx.base_path().to_path_buf();
+		let active = ctx.active_mut().unwrap();
+		path_buff.push(path);
+		match OpenOptions::new().read(true).open(path_buff)
+		{
+			Ok(mut f) =>
+			{
+				let len = match f.metadata()
+				{
+					Ok(meta) =>
+					{
+						match usize::try_from(meta.len())
+						{
+							Ok(len) =>
+							{
+								if !active.has_remaining(len)
+								{
+									let err = Box::new(DataError::Write(WriteError::Overflow{need: len, have: active.remaining()}));
+									return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+								}
+								len
+							},
+							Err(..) =>
+							{
+								let err = Box::new(DataError::Write(WriteError::Overflow{need: usize::MAX, have: active.remaining()}));
+								return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+							},
+						}
+					},
+					Err(e) => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))))),
+				};
+				
+				let mut pos = 0;
+				let mut temp = [0u8; 1024];
+				while pos < len
+				{
+					match f.read(&mut temp)
+					{
+						Ok(cnt) =>
+						{
+							if len - pos < cnt
+							{
+								if let Err(e) = active.write(&temp[..len - pos])
+								{
+									return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e))))));
+								}
+								// no need to update pos again
+								//pos = len;
+								break;
+							}
+							else
+							{
+								if let Err(e) = active.write(&temp[..cnt])
+								{
+									return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e))))));
+								}
+								pos += cnt;
+							}
+						},
+						Err(e) => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))))),
+					}
+				}
+				// reading less than expected is fine
+				drop(f);
+				Ok(())
+			},
+			Err(e) => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))))),
+		}
+	}
+}
 
 #[derive(Debug)]
 pub enum DataError
@@ -128,6 +204,7 @@ pub enum DataError
 	Range{min: i64, max: i64, have: i64},
 	HexChar{pos: usize, value: char},
 	HexEof,
+	File(io::Error),
 	Write(WriteError),
 }
 
@@ -141,6 +218,7 @@ impl fmt::Display for DataError
 			Self::Range{min, max, have} => write!(f, "constant out of range ({min} to {max}, got {have})"),
 			Self::HexChar{pos, value} => write!(f, "invalid hex char {value:?} at {pos}"),
 			Self::HexEof => f.write_str("unexpected eof in hex string"),
+			Self::File(..) => f.write_str("could not access referenced file"),
 			Self::Write(..) => f.write_str("could not write alignment bytes"),
 		}
 	}
@@ -152,6 +230,7 @@ impl Error for DataError
 	{
 		match self
 		{
+			Self::File(e) => Some(e),
 			Self::Write(e) => Some(e),
 			_ => None,
 		}

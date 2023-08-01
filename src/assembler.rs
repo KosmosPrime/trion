@@ -70,8 +70,7 @@ macro_rules!get_active
 
 pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 {
-	let base = path.parent().unwrap();
-	let mut ctx = Context::new();
+	let mut ctx = Context::new(path.parent().unwrap().to_path_buf());
 	let mut temp_str = String::new();
 	
 	for element in Parser::new(buff.as_ref())
@@ -314,6 +313,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 					},
 					"dfile" =>
 					{
+						let mut path_buff = ctx.base_path().to_path_buf();
 						get_active!(let active = ctx; print(".dfile") @ (element.line, element.col));
 						if args.len() != 1
 						{
@@ -329,7 +329,6 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 								return false;
 							},
 						};
-						let mut path_buff = base.to_path_buf();
 						path_buff.push(path);
 						match OpenOptions::new().read(true).open(path_buff)
 						{

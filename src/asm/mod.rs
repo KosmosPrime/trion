@@ -1,6 +1,7 @@
 use core::fmt;
 use std::collections::HashMap;
 use std::error::Error;
+use std::path::{Path, PathBuf};
 
 use crate::asm::mem::map::{MemoryMap, PutError, Search};
 
@@ -9,6 +10,7 @@ pub mod mem;
 
 pub struct Context
 {
+	base_path: PathBuf,
 	output: MemoryMap,
 	active: Segment,
 	labels: HashMap<String, u32>,
@@ -18,16 +20,22 @@ pub struct Context
 
 impl Context
 {
-	pub fn new() -> Self
+	pub fn new(base_path: PathBuf) -> Self
 	{
 		Self
 		{
+			base_path,
 			output: MemoryMap::new(),
 			active: Segment::Inactive(Vec::new()),
 			labels: HashMap::new(),
 			tasks: Vec::new(),
 			errors: Vec::new(),
 		}
+	}
+	
+	pub fn base_path(&self) -> &Path
+	{
+		self.base_path.as_ref()
 	}
 	
 	pub fn output(&self) -> &MemoryMap
