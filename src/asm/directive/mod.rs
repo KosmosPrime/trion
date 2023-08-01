@@ -20,6 +20,20 @@ impl DirectiveList
 		Self(HashMap::new())
 	}
 	
+	pub fn generate() -> Self
+	{
+		let mut list = Self::new();
+		list.register(Box::new(addr::Addr)).unwrap();
+		list.register(Box::new(align::Align)).unwrap();
+		list.register(Box::new(data::DataU8)).unwrap();
+		list.register(Box::new(data::DataU16)).unwrap();
+		list.register(Box::new(data::DataU32)).unwrap();
+		list.register(Box::new(data::DataHex)).unwrap();
+		list.register(Box::new(data::DataStr)).unwrap();
+		list.register(Box::new(data::DataFile)).unwrap();
+		list
+	}
+	
 	pub fn register(&mut self, directive: Box<dyn Directive>) -> Result<(), Box<dyn Directive>>
 	{
 		let name = directive.get_name().to_owned();

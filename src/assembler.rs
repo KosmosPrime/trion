@@ -1,5 +1,3 @@
-use std::fs::OpenOptions;
-use std::io::Read;
 use std::path::Path;
 
 use crate::arm6m::asm::{ImmReg, Instruction};
@@ -7,9 +5,11 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
+use crate::asm::directive::DirectiveList;
 use crate::asm::{Context, LabelError};
 use crate::asm::mem::MemoryRange;
 use crate::asm::mem::map::Search;
+use crate::text::Positioned;
 use crate::text::parse::{Argument, ElementValue, Parser};
 use crate::text::token::Number;
 use crate::uf2::write::Uf2Write;
@@ -31,18 +31,6 @@ macro_rules!print_err
 				write!(stderr, "\tsource: {src}\n").unwrap();
 				source = src.source();
 			}
-		}
-	};
-}
-
-macro_rules!space_check
-{
-	($ctx:ident, $active:ident, $need:expr, $line:expr, $col:expr) =>
-	{
-		if !$active.has_remaining($need)
-		{
-			eprintln!("Segment overflow at {:08X} ({}:{})", $active.curr_addr(), $line, $col);
-			return false;
 		}
 	};
 }
@@ -71,6 +59,7 @@ macro_rules!get_active
 pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 {
 	let mut ctx = Context::new(path.parent().unwrap().to_path_buf());
+	let directives = DirectiveList::generate();
 	let mut temp_str = String::new();
 	
 	for element in Parser::new(buff.as_ref())
@@ -89,324 +78,10 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 		{
 			ElementValue::Directive{name, args} =>
 			{
-				temp_str.clear();
-				temp_str.push_str(name);
-				temp_str.make_ascii_lowercase();
-				match temp_str.as_ref()
+				if let Err(e) = directives.process(&mut ctx, Positioned{value: (name, args.as_slice()), line: element.line, col: element.col})
 				{
-					"addr" =>
-					{
-						if args.len() != 1
-						{
-							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
-							return false;
-						}
-						let tgt = match args[0]
-						{
-							Argument::Constant(Number::Integer(val)) =>
-							{
-								let Ok(val) = u32::try_from(val) else
-								{
-									eprintln!("Address out of range ({}:{})", element.line, element.col);
-									return false;
-								};
-								val
-							},
-							_ =>
-							{
-								eprintln!("Invalid address ({}:{})", element.line, element.col);
-								return false;
-							},
-						};
-						if let Err(e) = ctx.change_segment(tgt)
-						{
-							print_err!(e, "Could change address to {tgt:08X} ({}:{})", element.line, element.col);
-							return false;
-						}
-					},
-					"align" =>
-					{
-						get_active!(let active = ctx; print(".align") @ (element.line, element.col));
-						if args.len() != 1
-						{
-							eprintln!("Align requires exactly one argument ({}:{})", element.line, element.col);
-							return false;
-						}
-						let len = match args[0]
-						{
-							Argument::Constant(Number::Integer(val)) =>
-							{
-								let Ok(val) = u32::try_from(val) else
-								{
-									eprintln!("Alignment out of range ({}:{})", element.line, element.col);
-									return false;
-								};
-								val
-							},
-							_ =>
-							{
-								eprintln!("Invalid alignment ({}:{})", element.line, element.col);
-								return false;
-							},
-						};
-						if len == 0
-						{
-							eprintln!("Alignment out of range ({}:{})", element.line, element.col);
-							return false;
-						}
-						let off = active.curr_addr() % len;
-						if off != 0
-						{
-							match usize::try_from(len - off)
-							{
-								Ok(new_len) =>
-								{
-									const PADDING: [u8; 256] = [0xBE; 256];
-									
-									space_check!(ctx, active, new_len, element.line, element.col);
-									for p in (0..new_len).step_by(256)
-									{
-										if new_len - p >= 256
-										{
-											active.write(&PADDING).unwrap();
-										}
-										else
-										{
-											active.write(&PADDING[..new_len - p]).unwrap();
-										}
-									}
-								},
-								Err(..) =>
-								{
-									eprintln!("Buffer overflow during .align ({}:{})", element.line, element.col);
-									return false;
-								},
-							}
-						}
-					},
-					"du8" | "du16" | "du32" =>
-					{
-						get_active!(let active = ctx; print(".{name}") @ (element.line, element.col));
-						let (min, max) = match name
-						{
-							"du8" => (u8::MIN as i64, u8::MAX as i64),
-							"du16" => (u16::MIN as i64, u16::MAX as i64),
-							"du32" => (u32::MIN as i64, u32::MAX as i64),
-							_ => unreachable!(),
-						};
-						if args.len() != 1
-						{
-							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
-							return false;
-						}
-						let val = match args[0]
-						{
-							Argument::Constant(Number::Integer(val)) =>
-							{
-								if val < min || val > max
-								{
-									eprintln!("Data value out of range ({}:{})", element.line, element.col);
-									return false;
-								}
-								val
-							},
-							_ =>
-							{
-								eprintln!("Invalid data value ({}:{})", element.line, element.col);
-								return false;
-							},
-						};
-						
-						let result = match name
-						{
-							"du8" => active.write(core::slice::from_ref(&(val as u8))),
-							"du16" => active.write(&u16::to_le_bytes(val as u16)),
-							"du32" => active.write(&u32::to_le_bytes(val as u32)),
-							_ => unreachable!(),
-						};
-						if let Err(e) = result
-						{
-							print_err!(e, "Could not write constant ({}, {})", element.line, element.col);
-							return false;
-						}
-					},
-					"dhex" =>
-					{
-						get_active!(let active = ctx; print(".dhex") @ (element.line, element.col));
-						if args.len() != 1
-						{
-							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
-							return false;
-						}
-						let val = match args[0]
-						{
-							Argument::String(ref in_hex) =>
-							{
-								let mut out_data = Vec::new();
-								let mut carry: Option<u8> = None;
-								for c in in_hex.as_ref().chars().filter(|&c| !c.is_ascii_whitespace())
-								{
-									match c.to_digit(16)
-									{
-										None =>
-										{
-											eprintln!("malformed hex string ({}:{})", element.line, element.col);
-											eprintln!("\tin {in_hex:?} {carry:?} {c:?}");
-											return false;
-										},
-										Some(v) =>
-										{
-											let v = v as u8;
-											match carry
-											{
-												None => carry = Some(v << 4),
-												Some(c) =>
-												{
-													out_data.push(v | c);
-													carry = None;
-												},
-											}
-										},
-									}
-								}
-								if carry.is_some()
-								{
-									eprintln!("Malformed hex string ({}:{})", element.line, element.col);
-									return false;
-								}
-								out_data
-							},
-							_ =>
-							{
-								eprintln!("Invalid data value ({}:{})", element.line, element.col);
-								return false;
-							},
-						};
-						if let Err(e) = active.write(val.as_slice())
-						{
-							print_err!(e, "Could not write hex blob ({}:{})", element.line, element.col);
-							return false;
-						}
-					},
-					"dstr" =>
-					{
-						get_active!(let active = ctx; print(".dstr") @ (element.line, element.col));
-						if args.len() != 1
-						{
-							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
-							return false;
-						}
-						let val = match args[0]
-						{
-							Argument::String(ref val) => val.as_ref().as_bytes(),
-							_ =>
-							{
-								eprintln!("Invalid data value ({}:{})", element.line, element.col);
-								return false;
-							},
-						};
-						if let Err(e) = active.write(val)
-						{
-							print_err!(e, "Could not write string ({}:{})", element.line, element.col);
-							return false;
-						}
-					},
-					"dfile" =>
-					{
-						let mut path_buff = ctx.base_path().to_path_buf();
-						get_active!(let active = ctx; print(".dfile") @ (element.line, element.col));
-						if args.len() != 1
-						{
-							eprintln!("{name:?} requires exactly one argument ({}:{})", element.line, element.col);
-							return false;
-						}
-						let path = match args[0]
-						{
-							Argument::String(ref s) => s.as_ref() as &str,
-							_ =>
-							{
-								eprintln!("Invalid path value ({}:{})", element.line, element.col);
-								return false;
-							},
-						};
-						path_buff.push(path);
-						match OpenOptions::new().read(true).open(path_buff)
-						{
-							Ok(mut f) =>
-							{
-								let len = match f.metadata()
-								{
-									Ok(meta) =>
-									{
-										match usize::try_from(meta.len())
-										{
-											Ok(len) => len,
-											Err(..) =>
-											{
-												eprintln!("File too long ({}:{})", element.line, element.col);
-												return false;
-											},
-										}
-									},
-									Err(e) =>
-									{
-										print_err!(e, "Cannot access metadata of {path:?} ({}:{})", element.line, element.col);
-										return false;
-									},
-								};
-								space_check!(ctx, active, len, element.line, element.col);
-								
-								let mut pos = 0;
-								let mut temp = [0u8; 1024];
-								while pos < len
-								{
-									match f.read(&mut temp)
-									{
-										Ok(cnt) =>
-										{
-											if len - pos < cnt
-											{
-												if let Err(e) = active.write(&temp[..len - pos])
-												{
-													print_err!(e, "Could not write file data at {pos} ({}:{})", element.line, element.col);
-													return false;
-												}
-												// no need to update pos again
-												//pos = len;
-												break;
-											}
-											else
-											{
-												if let Err(e) = active.write(&temp[..cnt])
-												{
-													print_err!(e, "Could not write file data at {pos} ({}:{})", element.line, element.col);
-													return false;
-												}
-												pos += cnt;
-											}
-										},
-										Err(e) =>
-										{
-											print_err!(e, "Could not read file {path:?} ({}:{})", element.line, element.col);
-											return false;
-										},
-									}
-								}
-								// reading less than expected is fine
-								drop(f);
-							},
-							Err(e) =>
-							{
-								print_err!(e, "Could not open file {path:?} ({}:{})", element.line, element.col);
-								return false;
-							},
-						}
-					},
-					_ =>
-					{
-						eprintln!("Unknown directive {name:?} ({}:{})", element.line, element.col);
-						return false;
-					},
+					print_err!(e, "Could not apply directive \".{}\"", name.escape_debug());
+					return false;
 				}
 			},
 			ElementValue::Label(name) =>
