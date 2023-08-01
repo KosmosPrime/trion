@@ -119,6 +119,7 @@ generate!
 		active.write(out_data.as_slice())
 	}
 }
+generate!(DataStr(String) as "dstr" => |ctx, active, args, value| {active.write(value.as_bytes())});
 
 #[derive(Debug)]
 pub enum DataError
