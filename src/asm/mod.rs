@@ -3,14 +3,18 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use crate::asm::instr::{InstructionSet, InstructionError};
 use crate::asm::mem::map::{MemoryMap, PutError, Search};
+use crate::text::parse::Argument;
 
 pub mod directive;
+pub mod instr;
 pub mod mem;
 
-pub struct Context
+pub struct Context<'l>
 {
 	base_path: PathBuf,
+	instructions: &'l dyn InstructionSet,
 	output: MemoryMap,
 	active: Segment,
 	labels: HashMap<String, u32>,
@@ -18,13 +22,14 @@ pub struct Context
 	errors: Vec<Box<dyn Error + 'static>>,
 }
 
-impl Context
+impl<'l> Context<'l>
 {
-	pub fn new(base_path: PathBuf) -> Self
+	pub fn new(base_path: PathBuf, instructions: &'l dyn InstructionSet) -> Self
 	{
 		Self
 		{
 			base_path,
+			instructions,
 			output: MemoryMap::new(),
 			active: Segment::Inactive(Vec::new()),
 			labels: HashMap::new(),
@@ -36,6 +41,11 @@ impl Context
 	pub fn base_path(&self) -> &Path
 	{
 		self.base_path.as_ref()
+	}
+	
+	pub fn get_instruction_set(&self) -> &'l dyn InstructionSet
+	{
+		self.instructions
 	}
 	
 	pub fn output(&self) -> &MemoryMap
@@ -117,6 +127,11 @@ impl Context
 	pub fn labels_mut(&mut self) -> &mut HashMap<String, u32>
 	{
 		&mut self.labels
+	}
+	
+	pub fn assemble<'s>(&'s mut self, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), &'s InstructionError>
+	{
+		self.instructions.assemble(self, line, col, name, args)
 	}
 	
 	pub fn add_task(&mut self, task: Box<dyn FnOnce(&mut Context)>)
