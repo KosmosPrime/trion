@@ -126,9 +126,10 @@ generate!
 {
 	DataFile(String) as "dfile" => |ctx, _active, args, path|
 	{
-		let mut path_buff = ctx.base_path().to_path_buf();
-		let active = ctx.active_mut().unwrap();
+		let mut path_buff = ctx.curr_path().unwrap().to_path_buf();
+		if !path_buff.pop() {path_buff.push("..");}
 		path_buff.push(path);
+		let active = ctx.active_mut().unwrap();
 		match OpenOptions::new().read(true).open(path_buff)
 		{
 			Ok(mut f) =>

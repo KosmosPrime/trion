@@ -9,6 +9,7 @@ use crate::text::parse::{Argument, ArgumentType};
 pub mod addr;
 pub mod align;
 pub mod data;
+pub mod include;
 
 #[derive(Debug)]
 pub struct DirectiveList(HashMap<String, Box<dyn Directive>>);
@@ -31,6 +32,7 @@ impl DirectiveList
 		list.register(Box::new(data::DataHex)).unwrap();
 		list.register(Box::new(data::DataStr)).unwrap();
 		list.register(Box::new(data::DataFile)).unwrap();
+		list.register(Box::new(include::Include)).unwrap();
 		list
 	}
 	

@@ -34,7 +34,7 @@ pub fn main()
 				let mut fi = OpenOptions::new().read(true).open(path).unwrap();
 				fi.read_to_end(&mut buff).unwrap();
 				drop(fi);
-				if assembler::assemble(&mut buff, path)
+				if assembler::assemble(&mut buff, path.to_path_buf())
 				{
 					if let Some(fop) = out_arg
 					{

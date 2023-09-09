@@ -1,12 +1,10 @@
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::arm6m::Arm6M;
 use crate::asm::directive::DirectiveList;
 use crate::asm::Context;
 use crate::asm::mem::MemoryRange;
 use crate::asm::mem::map::Search;
-use crate::text::Positioned;
-use crate::text::parse::{ElementValue, Parser};
 use crate::uf2::write::Uf2Write;
 use crate::uf2::crc::Crc;
 
@@ -30,80 +28,11 @@ macro_rules!print_err
 	};
 }
 
-macro_rules!get_active
+pub fn assemble(buff: &mut Vec<u8>, path: PathBuf) -> bool
 {
-	(let $dst:ident = $ctx:ident; print($($print:expr),+) @ ($line:expr, $col:expr)) =>
-	{
-		// stderr simply uses unwrap because failing to print to stderr means whatever message won't go through
-		let $dst = match $ctx.active_mut()
-		{
-			None =>
-			{
-				use std::io::Write;
-				let mut stderr = std::io::stderr().lock();
-				write!(stderr, "Image address unset for ").unwrap();
-				write!(stderr, $($print),+).unwrap();
-				write!(stderr, " ({}:{})\n", $line, $col).unwrap();
-				return false;
-			},
-			Some(v) => v,
-		};
-	};
-}
-
-pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
-{
-	let mut ctx = Context::new(path.parent().unwrap().to_path_buf(), &Arm6M);
 	let directives = DirectiveList::generate();
-	
-	for element in Parser::new(buff.as_ref())
-	{
-		let element = match element
-		{
-			Ok(el) => el,
-			Err(err) =>
-			{
-				print_err!(err, "Parsing failed");
-				return false;
-			},
-		};
-		
-		match element.value
-		{
-			ElementValue::Directive{name, args} =>
-			{
-				if let Err(e) = directives.process(&mut ctx, Positioned{value: (name, args.as_slice()), line: element.line, col: element.col})
-				{
-					print_err!(e, "Could not apply directive {name:?}");
-					return false;
-				}
-			},
-			ElementValue::Label(name) =>
-			{
-				get_active!(let active = ctx; print("label") @ (element.line, element.col));
-				let curr_addr = active.curr_addr();
-				let prev = ctx.labels_mut().insert(name.to_owned(), curr_addr);
-				if prev.is_some()
-				{
-					eprintln!("Duplicate label {name} ({}:{})", element.line, element.col);
-					return false;
-				}
-			},
-			ElementValue::Instruction{name, args} =>
-			{
-				if ctx.active().is_none()
-				{
-					eprintln!("Image address unset for instruction ({}:{})", element.line, element.col);
-					return false;
-				}
-				if let Err(e) = ctx.assemble(element.line, element.col, name, args)
-				{
-					print_err!(e, "Could not encode instruction {name:?}");
-					return false;
-				}
-			},
-		}
-	}
+	let mut ctx = Context::new(&Arm6M, &directives);
+	ctx.assemble(buff.as_ref(), path);
 	if let Err(e) = ctx.close_segment()
 	{
 		print_err!(e, "Could not close final segment");
@@ -111,7 +40,20 @@ pub fn assemble(buff: &mut Vec<u8>, path: &Path) -> bool
 	}
 	
 	if !ctx.has_errored() {ctx.run_tasks();}
-	if ctx.has_errored() {return false;}
+	if ctx.has_errored()
+	{
+		for err in ctx.get_errors()
+		{
+			eprintln!("Error: {err}");
+			let mut source = err.source();
+			while let Some(src) = source
+			{
+				eprintln!("\tsource: {src}");
+				source = src.source();
+			}
+		}
+		return false;
+	}
 	if ctx.output().len() > 0
 	{
 		const FLASH_BASE: u32 = 0x10000000;

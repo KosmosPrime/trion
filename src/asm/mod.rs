@@ -1,11 +1,14 @@
 use core::fmt;
+use core::num::NonZeroUsize;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use crate::asm::directive::DirectiveList;
 use crate::asm::instr::{InstructionSet, InstructionError};
 use crate::asm::mem::map::{MemoryMap, PutError, Search};
-use crate::text::parse::Argument;
+use crate::text::Positioned;
+use crate::text::parse::{Argument, ElementValue, Parser, ParseErrorKind};
 
 pub mod directive;
 pub mod instr;
@@ -13,8 +16,9 @@ pub mod mem;
 
 pub struct Context<'l>
 {
-	base_path: PathBuf,
+	path_stack: Vec<PathBuf>,
 	instructions: &'l dyn InstructionSet,
+	directives: &'l DirectiveList,
 	output: MemoryMap,
 	active: Segment,
 	labels: HashMap<String, u32>,
@@ -24,12 +28,13 @@ pub struct Context<'l>
 
 impl<'l> Context<'l>
 {
-	pub fn new(base_path: PathBuf, instructions: &'l dyn InstructionSet) -> Self
+	pub fn new(instructions: &'l dyn InstructionSet, directives: &'l DirectiveList) -> Self
 	{
 		Self
 		{
-			base_path,
+			path_stack: Vec::new(),
 			instructions,
+			directives,
 			output: MemoryMap::new(),
 			active: Segment::Inactive(Vec::new()),
 			labels: HashMap::new(),
@@ -38,14 +43,19 @@ impl<'l> Context<'l>
 		}
 	}
 	
-	pub fn base_path(&self) -> &Path
+	pub fn curr_path(&self) -> Option<&Path>
 	{
-		self.base_path.as_ref()
+		self.path_stack.last().map(PathBuf::as_path)
 	}
 	
 	pub fn get_instruction_set(&self) -> &'l dyn InstructionSet
 	{
 		self.instructions
+	}
+	
+	pub fn get_directives(&self) -> &'l DirectiveList
+	{
+		self.directives
 	}
 	
 	pub fn output(&self) -> &MemoryMap
@@ -129,7 +139,74 @@ impl<'l> Context<'l>
 		&mut self.labels
 	}
 	
-	pub fn assemble<'s>(&'s mut self, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), &'s InstructionError>
+	fn do_assemble<'s>(&'s mut self, data: &[u8]) -> bool
+	{
+		for element in Parser::new(data)
+		{
+			let element = match element
+			{
+				Ok(el) => el,
+				Err(e) =>
+				{
+					self.push_error(e);
+					return false;
+				},
+			};
+			
+			match element.value
+			{
+				ElementValue::Directive{name, args} =>
+				{
+					if self.directives.process(self, Positioned{value: (name, args.as_slice()), line: element.line, col: element.col}).is_err()
+					{
+						return false;
+					}
+				},
+				ElementValue::Label(name) =>
+				{
+					let curr_addr = match self.active()
+					{
+						None =>
+						{
+							self.push_error(element.convert(AsmErrorKind::Inactive));
+							return false;
+						},
+						Some(seg) => seg.curr_addr(),
+					};
+					let prev = self.labels.insert(name.to_owned(), curr_addr);
+					if prev.is_some()
+					{
+						self.push_error(element.convert(AsmErrorKind::DuplicateLabel(name.to_owned())));
+						return false;
+					}
+				},
+				ElementValue::Instruction{name, args} =>
+				{
+					if self.active().is_none()
+					{
+						self.push_error(Positioned{value: AsmErrorKind::Inactive, line: element.line, col: element.line});
+						return false;
+					}
+					if self.assemble_instr(element.line, element.col, name, args).is_err()
+					{
+						return false;
+					}
+				},
+			}
+		}
+		true
+	}
+	
+	pub fn assemble<'s>(&'s mut self, data: &[u8], path: PathBuf) -> (bool, PathBuf)
+	{
+		self.path_stack.push(path);
+		let count = NonZeroUsize::try_from(self.path_stack.len()).unwrap();
+		let frame = PathFrame{ctx: self, count: Some(count)};
+		let result = frame.ctx.do_assemble(data);
+		(result, frame.into_inner())
+	}
+	
+	pub fn assemble_instr<'s>(&'s mut self, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), &'s InstructionError>
 	{
 		self.instructions.assemble(self, line, col, name, args)
 	}
@@ -161,6 +238,37 @@ impl<'l> Context<'l>
 	pub fn get_errors(&self) -> &[Box<dyn Error>]
 	{
 		self.errors.as_ref()
+	}
+}
+
+struct PathFrame<'l, 'c: 'l>
+{
+	ctx: &'l mut Context<'c>,
+	count: Option<NonZeroUsize>
+}
+
+impl<'l, 'c: 'l> PathFrame<'l, 'c>
+{
+	pub fn into_inner(self) -> PathBuf
+	{
+		let count = self.count.unwrap();
+		assert!(self.ctx.path_stack.len() == count.get());
+		let buff = self.ctx.path_stack.pop().unwrap();
+		// this replaces drop as this call takes the value back out
+		core::mem::forget(self);
+		buff
+	}
+}
+
+impl<'l, 'c: 'l> Drop for PathFrame<'l, 'c>
+{
+	fn drop(&mut self)
+	{
+		if let Some(count) = self.count
+		{
+			assert!(self.ctx.path_stack.len() == count.get());
+			self.ctx.path_stack.pop();
+		}
 	}
 }
 
@@ -302,7 +410,7 @@ impl fmt::Display for LabelError
 	{
 		match self
 		{
-			Self::NotFound(name) => write!(f, "no such label {:?}", name),
+			Self::NotFound(name) => write!(f, "no such label {name:?}"),
 			Self::Range{min, max, have} => write!(f, "label out of range ({min} to {max}, got {have})"),
 			Self::Alignment{align, have} => write!(f, "misaligned label (expect {align}, got {have})"),
 		}
@@ -310,3 +418,38 @@ impl fmt::Display for LabelError
 }
 
 impl Error for LabelError {}
+
+pub type AssembleError = Positioned<AsmErrorKind>;
+
+#[derive(Debug)]
+pub enum AsmErrorKind
+{
+	Parse(ParseErrorKind),
+	Inactive,
+	DuplicateLabel(String),
+}
+
+impl fmt::Display for AsmErrorKind
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+	{
+		match self
+		{
+			Self::Parse(..) => f.write_str("parsing failed"),
+			Self::Inactive => f.write_str("no active segment"),
+			Self::DuplicateLabel(name) => write!(f, "duplicate label {name:?}"),
+		}
+	}
+}
+
+impl Error for AsmErrorKind
+{
+	fn source(&self) -> Option<&(dyn Error + 'static)>
+	{
+		match self
+		{
+			Self::Parse(e) => Some(e),
+			_ => None,
+		}
+	}
+}
