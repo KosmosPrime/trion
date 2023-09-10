@@ -1,7 +1,7 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::asm::{Context, WriteError};
+use crate::asm::{Context, SegmentError};
 use crate::asm::directive::{Directive, DirectiveError, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
@@ -51,7 +51,7 @@ impl Directive for Align
 					const PADDING: [u8; 256] = [0xBE; 256];
 					if !active.has_remaining(new_len)
 					{
-						let err = Box::new(AlignError::Write(WriteError::Overflow{need: new_len, have: active.remaining()}));
+						let err = Box::new(AlignError::Write(SegmentError::Overflow{need: new_len, have: active.remaining()}));
 						return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
 					}
 					for p in (0..new_len).step_by(256)
@@ -81,7 +81,7 @@ pub enum AlignError
 	Inactive,
 	Range(i64),
 	Overflow{need: u32, have: usize},
-	Write(WriteError),
+	Write(SegmentError),
 }
 
 impl fmt::Display for AlignError

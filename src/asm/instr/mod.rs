@@ -1,7 +1,7 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::asm::{self, Context};
+use crate::asm::{Context, SegmentError};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 
@@ -21,7 +21,7 @@ pub enum InstrErrorKind
 	ArgumentType{instr: String, idx: usize, need: ArgumentType, have: ArgumentType},
 	ValueRange{instr: String, idx: usize},
 	NoSuchRegister{instr: String, idx: usize, what: String},
-	Write(asm::WriteError),
+	Write(SegmentError),
 	Generic(Box<dyn Error>),
 }
 

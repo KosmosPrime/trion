@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
 
-use crate::asm::{Context, WriteError};
+use crate::asm::{Context, SegmentError};
 use crate::asm::directive::{Directive, DirectiveError, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
@@ -144,14 +144,14 @@ generate!
 							{
 								if !active.has_remaining(len)
 								{
-									let err = Box::new(DataError::Write(WriteError::Overflow{need: len, have: active.remaining()}));
+									let err = Box::new(DataError::Write(SegmentError::Overflow{need: len, have: active.remaining()}));
 									return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
 								}
 								len
 							},
 							Err(..) =>
 							{
-								let err = Box::new(DataError::Write(WriteError::Overflow{need: usize::MAX, have: active.remaining()}));
+								let err = Box::new(DataError::Write(SegmentError::Overflow{need: usize::MAX, have: active.remaining()}));
 								return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
 							},
 						}
@@ -206,7 +206,7 @@ pub enum DataError
 	HexChar{pos: usize, value: char},
 	HexEof,
 	File(io::Error),
-	Write(WriteError),
+	Write(SegmentError),
 }
 
 impl fmt::Display for DataError

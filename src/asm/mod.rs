@@ -277,6 +277,7 @@ pub enum SegmentError
 {
 	Write(PutError),
 	Occupied(u32),
+	Overflow{need: usize, have: usize},
 }
 
 impl fmt::Display for SegmentError
@@ -287,6 +288,7 @@ impl fmt::Display for SegmentError
 		{
 			Self::Write(..) => f.write_str("could not write complete segment"),
 			Self::Occupied(addr) => write!(f, "address {addr:08X} is already occupied"),
+			Self::Overflow{need, have} => write!(f, "segment overflow (need {need}, capacity {have})"),
 		}
 	}
 }
@@ -363,7 +365,7 @@ impl ActiveSegment
 		len <= self.remaining()
 	}
 	
-	pub fn write(&mut self, data: &[u8]) -> Result<(), WriteError>
+	pub fn write(&mut self, data: &[u8]) -> Result<(), SegmentError>
 	{
 		if self.has_remaining(data.len())
 		{
@@ -372,29 +374,10 @@ impl ActiveSegment
 		}
 		else
 		{
-			Err(WriteError::Overflow{need: data.len(), have: self.remaining()})
+			Err(SegmentError::Overflow{need: data.len(), have: self.remaining()})
 		}
 	}
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum WriteError
-{
-	Overflow{need: usize, have: usize},
-}
-
-impl fmt::Display for WriteError
-{
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
-	{
-		match self
-		{
-			Self::Overflow{need, have} => write!(f, "segment overflow (need {need}, capacity {have})"),
-		}
-	}
-}
-
-impl Error for WriteError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LabelError
