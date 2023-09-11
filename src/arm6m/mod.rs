@@ -523,8 +523,7 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 	{
 		None =>
 		{
-			eprintln!("No such label {label:?} ({line}:{col})");
-			ctx.push_error(LabelError::NotFound(label.to_owned()));
+			ctx.push_error(Positioned{value: LabelError::NotFound(label.to_owned()), line, col});
 			return;
 		},
 		Some(&t) => t,
@@ -537,13 +536,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let al_pc = (addr & !0b11).wrapping_add(4);
 			if tgt < al_pc || tgt - al_pc > 0xFF << 2
 			{
-				eprintln!("Label out of range ({line}:{col})");
-				ctx.push_error(LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
+				ctx.push_error(Positioned{value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}, line, col});
 			}
 			else if ((tgt - al_pc) & 0b11) != 0
 			{
-				eprintln!("Misaligned label ({line}:{col})");
-				ctx.push_error(LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
+				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}, line, col});
 			}
 			else {*off = (tgt - al_pc) as u16;}
 		},
@@ -554,13 +551,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
 			if off_val < min || off_val > max
 			{
-				eprintln!("Label out of range ({line}:{col})");
-				ctx.push_error(LabelError::Range{min, max, have: off_val});
+				ctx.push_error(Positioned{value: LabelError::Range{min, max, have: off_val}, line, col});
 			}
 			else if (off_val & 0b1) != 0
 			{
-				eprintln!("Misaligned label ({line}:{col})");
-				ctx.push_error(LabelError::Alignment{align: 0b10, have: off_val});
+				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b10, have: off_val}, line, col});
 			}
 			else {*off = off_val as i32}
 		},
@@ -571,13 +566,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let (min, max) = (-1 << 24, (1 << 24) - 1);
 			if off_val < min || off_val > max
 			{
-				eprintln!("Label out of range ({line}:{col})");
-				ctx.push_error(LabelError::Range{min, max, have: off_val});
+				ctx.push_error(Positioned{value: LabelError::Range{min, max, have: off_val}, line, col});
 			}
 			else if (off_val & 0b1) != 0
 			{
-				eprintln!("Misaligned label ({line}:{col})");
-				ctx.push_error(LabelError::Alignment{align: 0b10, have: off_val});
+				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b10, have: off_val}, line, col});
 			}
 			else {*off = off_val as i32}
 		},
@@ -586,13 +579,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let al_pc = (addr & !0b11).wrapping_add(4);
 			if tgt < al_pc || tgt - al_pc > 0xFF << 2
 			{
-				eprintln!("Label out of range ({line}:{col})");
-				ctx.push_error(LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
+				ctx.push_error(Positioned{value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}, line, col});
 			}
 			else if ((tgt - al_pc) & 0b11) != 0
 			{
-				eprintln!("Misaligned label ({line}:{col})");
-				ctx.push_error(LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
+				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}, line, col});
 			}
 			else {*off = ImmReg::Immediate((tgt - al_pc) as i32);}
 		},

@@ -229,7 +229,7 @@ impl<'l> Context<'l>
 		!self.errors.is_empty()
 	}
 	
-	pub fn push_error<T: Error + 'static>(&mut self, error: T) -> &T
+	pub fn push_error<T: Error + 'static>(&mut self, error: Positioned<T>) -> &Positioned<T>
 	{
 		self.errors.push(Box::new(error));
 		self.errors.last().unwrap().as_ref().downcast_ref().unwrap()
