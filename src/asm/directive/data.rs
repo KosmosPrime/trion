@@ -3,8 +3,8 @@ use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
 
-use crate::asm::{Context, SegmentError};
-use crate::asm::directive::{Directive, DirectiveError, DirectiveErrorKind};
+use crate::asm::{Context, ErrorLevel, SegmentError};
+use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
@@ -23,21 +23,24 @@ macro_rules!generate
 				$label
 			}
 			
-			fn apply<'c>(&self, $ctx: &'c mut Context, $args: Positioned<&[Argument]>) -> Result<(), &'c DirectiveError>
+			fn apply<'c>(&self, $ctx: &'c mut Context, $args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 			{
 				let Some($active) = $ctx.active_mut()
 				else
 				{
-					return Err($ctx.push_error($args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Inactive)))));
+					$ctx.push_error($args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Inactive))));
+					return Err(ErrorLevel::Fatal);
 				};
 				if $args.value.len() != 1
 				{
-					return Err($ctx.push_error($args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()})))
+					$ctx.push_error($args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+					return Err(ErrorLevel::Trivial);
 				}
 				let $value = generate!(@impl $($argt)+ = $args[0], $ctx, $active);
 				if let Err(e) = {$($write)+}
 				{
-					return Err($ctx.push_error($args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e))))));
+					$ctx.push_error($args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e)))));
+					return Err(ErrorLevel::Fatal);
 				}
 				Ok(())
 			}
@@ -56,14 +59,16 @@ macro_rules!generate
 					_ =>
 					{
 						let err = Box::new(DataError::Range{min: i64::from(<$type>::MIN), max: i64::from(<$type>::MAX), have: val});
-						return Err($ctx.push_error($args.convert(DirectiveErrorKind::Apply(err))));
+						$ctx.push_error($args.convert(DirectiveErrorKind::Apply(err)));
+						return Err(ErrorLevel::Fatal);
 					},
 				}
 			},
 			ref arg =>
 			{
 				let err = DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have: arg.get_type()};
-				return Err($ctx.push_error($args.convert(err)));
+				$ctx.push_error($args.convert(err));
+				return Err(ErrorLevel::Trivial);
 			},
 		}
 	};
@@ -75,7 +80,8 @@ macro_rules!generate
 			ref arg =>
 			{
 				let err = DirectiveErrorKind::Argument{idx: $idx, expect: ArgumentType::String, have: arg.get_type()};
-				return Err($ctx.push_error($args.convert(err)));
+				$ctx.push_error($args.convert(err));
+				return Err(ErrorLevel::Trivial);
 			},
 		}
 	};
@@ -97,7 +103,8 @@ generate!
 				None =>
 				{
 					let err = Box::new(DataError::HexChar{pos, value: c});
-					return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+					return Err(ErrorLevel::Fatal);
 				},
 				Some(v) =>
 				{
@@ -116,7 +123,8 @@ generate!
 		}
 		if carry.is_some()
 		{
-			return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::HexEof)))));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::HexEof))));
+			return Err(ErrorLevel::Fatal);
 		}
 		active.write(out_data.as_slice())
 	}
@@ -145,18 +153,24 @@ generate!
 								if !active.has_remaining(len)
 								{
 									let err = Box::new(DataError::Write(SegmentError::Overflow{need: len, have: active.remaining()}));
-									return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+									return Err(ErrorLevel::Fatal);
 								}
 								len
 							},
 							Err(..) =>
 							{
 								let err = Box::new(DataError::Write(SegmentError::Overflow{need: usize::MAX, have: active.remaining()}));
-								return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+								ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+								return Err(ErrorLevel::Fatal);
 							},
 						}
 					},
-					Err(e) => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))))),
+					Err(e) =>
+					{
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))));
+						return Err(ErrorLevel::Fatal);
+					},
 				};
 				
 				let mut pos = 0;
@@ -171,7 +185,8 @@ generate!
 							{
 								if let Err(e) = active.write(&temp[..len - pos])
 								{
-									return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e))))));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e)))));
+									return Err(ErrorLevel::Fatal);
 								}
 								// no need to update pos again
 								//pos = len;
@@ -181,19 +196,28 @@ generate!
 							{
 								if let Err(e) = active.write(&temp[..cnt])
 								{
-									return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e))))));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::Write(e)))));
+									return Err(ErrorLevel::Fatal);
 								}
 								pos += cnt;
 							}
 						},
-						Err(e) => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))))),
+						Err(e) =>
+						{
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))));
+							return Err(ErrorLevel::Fatal);
+						},
 					}
 				}
 				// reading less than expected is fine
 				drop(f);
 				Ok(())
 			},
-			Err(e) => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))))),
+			Err(e) =>
+			{
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(DataError::File(e)))));
+				return Err(ErrorLevel::Fatal);
+			},
 		}
 	}
 }

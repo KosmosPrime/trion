@@ -4,8 +4,8 @@ use std::fs::OpenOptions;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
-use crate::asm::Context;
-use crate::asm::directive::{Directive, DirectiveError, DirectiveErrorKind};
+use crate::asm::{Context, ErrorLevel};
+use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 
@@ -19,11 +19,12 @@ impl Directive for Include
 		"include"
 	}
 	
-	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), &'c DirectiveError>
+	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 	{
 		if args.value.len() != 1
 		{
-			return Err(ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()})))
+			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+			return Err(ErrorLevel::Trivial);
 		}
 		let path = match args.value[0]
 		{
@@ -38,7 +39,11 @@ impl Directive for Include
 				curr.push(path.as_ref());
 				curr
 			},
-			ref arg => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::String, have: arg.get_type()}))),
+			ref arg =>
+			{
+				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::String, have: arg.get_type()}));
+				return Err(ErrorLevel::Trivial);
+			},
 		};
 		let mut f = match OpenOptions::new().read(true).open(&path)
 		{
@@ -46,20 +51,22 @@ impl Directive for Include
 			Err(err) =>
 			{
 				let err = Box::new(IncludeError::NoSuchFile{path, err});
-				return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+				return Err(ErrorLevel::Fatal);
 			},
 		};
 		let mut data = Vec::new();
 		if let Err(err) = f.read_to_end(&mut data)
 		{
 			let err = Box::new(IncludeError::FileRead{path, err});
-			return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+			return Err(ErrorLevel::Fatal);
 		}
-		let (result, path) = ctx.assemble(data.as_ref(), path);
-		if !result
+		if let (Err(..), path) = ctx.assemble(data.as_ref(), path)
 		{
 			let err = Box::new(IncludeError::AssemblyFailed{path});
-			return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+			return Err(ErrorLevel::Fatal);
 		}
 		Ok(())
 	}

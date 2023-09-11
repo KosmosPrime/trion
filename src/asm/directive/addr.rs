@@ -1,8 +1,8 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::asm::{Context, SegmentError};
-use crate::asm::directive::{Directive, DirectiveError, DirectiveErrorKind};
+use crate::asm::{Context, ErrorLevel, SegmentError};
+use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
@@ -17,11 +17,12 @@ impl Directive for Addr
 		"addr"
 	}
 	
-	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), &'c DirectiveError>
+	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 	{
 		if args.value.len() != 1
 		{
-			return Err(ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()})))
+			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+			return Err(ErrorLevel::Trivial);
 		}
 		let tgt = match args.value[0]
 		{
@@ -30,15 +31,21 @@ impl Directive for Addr
 				let &Number::Integer(val) = num;
 				let Ok(val) = u32::try_from(val) else
 				{
-					return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AddrError::Range(val))))));
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AddrError::Range(val)))));
+					return Err(ErrorLevel::Fatal);
 				};
 				val
 			},
-			ref arg => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have: arg.get_type()}))),
+			ref arg =>
+			{
+				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have: arg.get_type()}));
+				return Err(ErrorLevel::Trivial);
+			},
 		};
 		if let Err(e) = ctx.change_segment(tgt)
 		{
-			return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AddrError::Segment(e))))));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AddrError::Segment(e)))));
+			return Err(ErrorLevel::Fatal);
 		}
 		Ok(())
 	}

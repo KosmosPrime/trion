@@ -1,13 +1,13 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::asm::{Context, SegmentError};
+use crate::asm::{Context, ErrorLevel, SegmentError};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 
 pub trait InstructionSet
 {
-	fn assemble<'c>(&self, ctx: &'c mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), &'c InstructionError>;
+	fn assemble<'c>(&self, ctx: &'c mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>;
 }
 
 pub type InstructionError = Positioned<InstrErrorKind>;

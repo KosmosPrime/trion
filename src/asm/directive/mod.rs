@@ -2,7 +2,7 @@ use core::fmt;
 use std::collections::HashMap;
 use std::error::Error;
 
-use crate::asm::Context;
+use crate::asm::{Context, ErrorLevel};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 
@@ -46,11 +46,15 @@ impl DirectiveList
 		}
 	}
 	
-	pub fn process<'c>(&self, ctx: &'c mut Context, contents: Positioned<(&str, &[Argument])>) -> Result<(), &'c DirectiveError>
+	pub fn process<'c>(&self, ctx: &'c mut Context, contents: Positioned<(&str, &[Argument])>) -> Result<(), ErrorLevel>
 	{
 		match self.0.get(contents.value.0)
 		{
-			None => Err(ctx.push_error(contents.convert_fn(|v| DirectiveErrorKind::NotFound(v.0.to_owned())))),
+			None =>
+			{
+				ctx.push_error(contents.convert_fn(|v| DirectiveErrorKind::NotFound(v.0.to_owned())));
+				Err(ErrorLevel::Fatal)
+			},
 			Some(directive) => directive.apply(ctx, contents.convert_fn(|v| v.1)),
 		}
 	}
@@ -60,7 +64,7 @@ pub trait Directive: fmt::Debug
 {
 	fn get_name(&self) -> &str;
 	
-	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), &'c DirectiveError>;
+	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>;
 }
 
 pub type DirectiveError = Positioned<DirectiveErrorKind>;

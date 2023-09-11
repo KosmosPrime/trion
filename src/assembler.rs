@@ -32,7 +32,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: PathBuf) -> bool
 {
 	let directives = DirectiveList::generate();
 	let mut ctx = Context::new(&Arm6M, &directives);
-	ctx.assemble(buff.as_ref(), path);
+	drop(ctx.assemble(buff.as_ref(), path));
 	if let Err(e) = ctx.close_segment()
 	{
 		print_err!(e, "Could not close final segment");

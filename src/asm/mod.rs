@@ -5,7 +5,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use crate::asm::directive::DirectiveList;
-use crate::asm::instr::{InstructionSet, InstructionError};
+use crate::asm::instr::InstructionSet;
 use crate::asm::mem::map::{MemoryMap, PutError, Search};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ElementValue, Parser, ParseErrorKind};
@@ -13,6 +13,12 @@ use crate::text::parse::{Argument, ElementValue, Parser, ParseErrorKind};
 pub mod directive;
 pub mod instr;
 pub mod mem;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ErrorLevel
+{
+	Trivial, Fatal,
+}
 
 pub struct Context<'l>
 {
@@ -139,7 +145,7 @@ impl<'l> Context<'l>
 		&mut self.labels
 	}
 	
-	fn do_assemble<'s>(&'s mut self, data: &[u8]) -> bool
+	fn do_assemble<'s>(&'s mut self, data: &[u8]) -> Result<(), ErrorLevel>
 	{
 		for element in Parser::new(data)
 		{
@@ -149,7 +155,7 @@ impl<'l> Context<'l>
 				Err(e) =>
 				{
 					self.push_error(e);
-					return false;
+					return Err(ErrorLevel::Fatal);
 				},
 			};
 			
@@ -157,9 +163,9 @@ impl<'l> Context<'l>
 			{
 				ElementValue::Directive{name, args} =>
 				{
-					if self.directives.process(self, Positioned{value: (name, args.as_slice()), line: element.line, col: element.col}).is_err()
+					if let Err(e) = self.directives.process(self, Positioned{value: (name, args.as_slice()), line: element.line, col: element.col})
 					{
-						return false;
+						return Err(e);
 					}
 				},
 				ElementValue::Label(name) =>
@@ -169,15 +175,14 @@ impl<'l> Context<'l>
 						None =>
 						{
 							self.push_error(element.convert(AsmErrorKind::Inactive));
-							return false;
+							return Err(ErrorLevel::Fatal);
 						},
 						Some(seg) => seg.curr_addr(),
 					};
-					let prev = self.labels.insert(name.to_owned(), curr_addr);
-					if prev.is_some()
+					if self.labels.insert(name.to_owned(), curr_addr).is_some()
 					{
 						self.push_error(element.convert(AsmErrorKind::DuplicateLabel(name.to_owned())));
-						return false;
+						return Err(ErrorLevel::Fatal);
 					}
 				},
 				ElementValue::Instruction{name, args} =>
@@ -185,19 +190,19 @@ impl<'l> Context<'l>
 					if self.active().is_none()
 					{
 						self.push_error(Positioned{value: AsmErrorKind::Inactive, line: element.line, col: element.line});
-						return false;
+						return Err(ErrorLevel::Fatal);
 					}
-					if self.assemble_instr(element.line, element.col, name, args).is_err()
+					if let Err(e) = self.assemble_instr(element.line, element.col, name, args)
 					{
-						return false;
+						return Err(e);
 					}
 				},
 			}
 		}
-		true
+		Ok(())
 	}
 	
-	pub fn assemble<'s>(&'s mut self, data: &[u8], path: PathBuf) -> (bool, PathBuf)
+	pub fn assemble<'s>(&'s mut self, data: &[u8], path: PathBuf) -> (Result<(), ErrorLevel>, PathBuf)
 	{
 		self.path_stack.push(path);
 		let count = NonZeroUsize::try_from(self.path_stack.len()).unwrap();
@@ -206,7 +211,7 @@ impl<'l> Context<'l>
 		(result, frame.into_inner())
 	}
 	
-	pub fn assemble_instr<'s>(&'s mut self, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), &'s InstructionError>
+	pub fn assemble_instr<'s>(&'s mut self, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
 		self.instructions.assemble(self, line, col, name, args)
 	}
@@ -229,10 +234,9 @@ impl<'l> Context<'l>
 		!self.errors.is_empty()
 	}
 	
-	pub fn push_error<T: Error + 'static>(&mut self, error: Positioned<T>) -> &Positioned<T>
+	pub fn push_error<T: Error + 'static>(&mut self, error: Positioned<T>)
 	{
 		self.errors.push(Box::new(error));
-		self.errors.last().unwrap().as_ref().downcast_ref().unwrap()
 	}
 	
 	pub fn get_errors(&self) -> &[Box<dyn Error>]

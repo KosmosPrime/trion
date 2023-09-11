@@ -1,8 +1,8 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::asm::{Context, SegmentError};
-use crate::asm::directive::{Directive, DirectiveError, DirectiveErrorKind};
+use crate::asm::{Context, ErrorLevel, SegmentError};
+use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
@@ -17,16 +17,18 @@ impl Directive for Align
 		"align"
 	}
 	
-	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), &'c DirectiveError>
+	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 	{
 		let Some(active) = ctx.active_mut()
 		else
 		{
-			return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Inactive)))));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Inactive))));
+			return Err(ErrorLevel::Fatal);
 		};
 		if args.value.len() != 1
 		{
-			return Err(ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()})))
+			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+			return Err(ErrorLevel::Trivial);
 		}
 		let len = match args.value[0]
 		{
@@ -36,10 +38,18 @@ impl Directive for Align
 				match u32::try_from(val)
 				{
 					Ok(val) if val > 0 => val,
-					_ => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Range(val)))))),
+					_ =>
+					{
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Range(val)))));
+						return Err(ErrorLevel::Fatal);
+					},
 				}
 			},
-			ref arg => return Err(ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have: arg.get_type()}))),
+			ref arg =>
+			{
+				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have: arg.get_type()}));
+				return Err(ErrorLevel::Trivial);
+			},
 		};
 		let off = active.curr_addr() % len;
 		if off != 0
@@ -52,7 +62,8 @@ impl Directive for Align
 					if !active.has_remaining(new_len)
 					{
 						let err = Box::new(AlignError::Write(SegmentError::Overflow{need: new_len, have: active.remaining()}));
-						return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+						return Err(ErrorLevel::Fatal);
 					}
 					for p in (0..new_len).step_by(256)
 					{
@@ -60,14 +71,16 @@ impl Directive for Align
 						else {active.write(&PADDING[..new_len - p])};
 						if let Err(e) = result
 						{
-							return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Write(e))))));
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Write(e)))));
+							return Err(ErrorLevel::Fatal);
 						}
 					}
 				},
 				Err(..) =>
 				{
 					let err = Box::new(AlignError::Overflow{need: len - off, have: active.remaining()});
-					return Err(ctx.push_error(args.convert(DirectiveErrorKind::Apply(err))))
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+					return Err(ErrorLevel::Fatal);
 				},
 			}
 		}
