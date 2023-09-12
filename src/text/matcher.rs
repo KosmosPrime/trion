@@ -40,7 +40,7 @@ impl<'l> Matcher<'l>
 	
 	pub fn positioned<T>(&self, value: T) -> Positioned<T>
 	{
-		Positioned{value, line: self.line, col: self.col}
+		Positioned{line: self.line, col: self.col, value}
 	}
 	
 	pub fn clear(&mut self)

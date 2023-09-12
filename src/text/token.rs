@@ -108,7 +108,7 @@ fn consume_block_comment<'l>(m: &mut Matcher<'l>, line: u32, col: u32) -> Result
 			Err(e) => return Err(e),
 		}
 	}
-	Err(Positioned{value: TokenErrorKind::BlockComment, line, col})
+	Err(Positioned{line, col, value: TokenErrorKind::BlockComment})
 }
 
 impl<'l> Tokenizer<'l>

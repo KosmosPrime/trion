@@ -38,14 +38,14 @@ impl InstructionSet for Arm6M
 					{
 						let need = arg_pos.saturating_add(convert!(@impl/count {$($which)*}));
 						let err = InstrErrorKind::TooManyArguments{instr: name.to_owned(), need, have: args.len()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					}
 					if args.len() - arg_pos < convert!(@impl/count {$($which)*})
 					{
 						let need = arg_pos.saturating_add(convert!(@impl/count {$($which)*}));
 						let err = InstrErrorKind::NotEnoughArguments{instr: name.to_owned(), need, have: args.len()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					}
 					$(
@@ -67,7 +67,7 @@ impl InstructionSet for Arm6M
 						else
 						{
 							let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos + 1};
-							ctx.push_error(Positioned{value: err, line, col});
+							ctx.push_error(Positioned{line, col, value: err});
 							return Err(ErrorLevel::Fatal);
 						};
 						arg_pos += 1;
@@ -76,7 +76,7 @@ impl InstructionSet for Arm6M
 					ref arg =>
 					{
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Constant, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -93,7 +93,7 @@ impl InstructionSet for Arm6M
 					ref arg =>
 					{
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -109,7 +109,7 @@ impl InstructionSet for Arm6M
 							Ok(r) => r,
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{value: e, line, col});
+								ctx.push_error(Positioned{line, col, value: e});
 								return Err(ErrorLevel::Fatal);
 							},
 						};
@@ -119,7 +119,7 @@ impl InstructionSet for Arm6M
 					ref arg =>
 					{
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -135,7 +135,7 @@ impl InstructionSet for Arm6M
 							Ok(r) => r,
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{value: e, line, col});
+								ctx.push_error(Positioned{line, col, value: e});
 								return Err(ErrorLevel::Fatal);
 							},
 						};
@@ -145,7 +145,7 @@ impl InstructionSet for Arm6M
 					ref arg =>
 					{
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -160,7 +160,7 @@ impl InstructionSet for Arm6M
 						else
 						{
 							let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos + 1};
-							ctx.push_error(Positioned{value: err, line, col});
+							ctx.push_error(Positioned{line, col, value: err});
 							return Err(ErrorLevel::Fatal);
 						};
 						arg_pos += 1;
@@ -173,7 +173,7 @@ impl InstructionSet for Arm6M
 							Ok(r) => r,
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{value: e, line, col});
+								ctx.push_error(Positioned{line, col, value: e});
 								return Err(ErrorLevel::Fatal);
 							},
 						};
@@ -184,7 +184,7 @@ impl InstructionSet for Arm6M
 					{
 						// REM should indicate that an immediate value would also work
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -200,7 +200,7 @@ impl InstructionSet for Arm6M
 							Ok(rs) => rs,
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{value: e, line, col});
+								ctx.push_error(Positioned{line, col, value: e});
 								return Err(ErrorLevel::Fatal);
 							},
 						};
@@ -210,7 +210,7 @@ impl InstructionSet for Arm6M
 					ref arg =>
 					{
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Sequence, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -226,7 +226,7 @@ impl InstructionSet for Arm6M
 							Ok((a, o)) => (a, o),
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{value: e, line, col});
+								ctx.push_error(Positioned{line, col, value: e});
 								return Err(ErrorLevel::Fatal);
 							},
 						};
@@ -236,7 +236,7 @@ impl InstructionSet for Arm6M
 					ref arg =>
 					{
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Address, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -252,7 +252,7 @@ impl InstructionSet for Arm6M
 							Ok((a, o)) => (a, o),
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{value: e, line, col});
+								ctx.push_error(Positioned{line, col, value: e});
 								return Err(ErrorLevel::Fatal);
 							},
 						};
@@ -268,7 +268,7 @@ impl InstructionSet for Arm6M
 					{
 						// REM should indicate that an address would also work
 						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -335,7 +335,7 @@ impl InstructionSet for Arm6M
 					_ =>
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					},
 				}
@@ -358,7 +358,7 @@ impl InstructionSet for Arm6M
 					if pm != "i"
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					}
 				});
@@ -371,7 +371,7 @@ impl InstructionSet for Arm6M
 					if opt != "SV"
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					}
 				});
@@ -384,7 +384,7 @@ impl InstructionSet for Arm6M
 					if opt != "SV"
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					}
 				});
@@ -398,7 +398,7 @@ impl InstructionSet for Arm6M
 					if opt != "SV"
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					}
 				});
@@ -436,7 +436,7 @@ impl InstructionSet for Arm6M
 								None | Some(ImmReg::Immediate(..)) =>
 								{
 									let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-									ctx.push_error(Positioned{value: err, line, col});
+									ctx.push_error(Positioned{line, col, value: err});
 									return Err(ErrorLevel::Fatal);
 								},
 								Some(ImmReg::Register(off)) => Instruction::Ldrsb{dst, addr: addr.0, off},
@@ -449,7 +449,7 @@ impl InstructionSet for Arm6M
 								None | Some(ImmReg::Immediate(..)) =>
 								{
 									let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-									ctx.push_error(Positioned{value: err, line, col});
+									ctx.push_error(Positioned{line, col, value: err});
 									return Err(ErrorLevel::Fatal);
 								},
 								Some(ImmReg::Register(off)) => Instruction::Ldrsh{dst, addr: addr.0, off},
@@ -481,7 +481,7 @@ impl InstructionSet for Arm6M
 					if rhs != 0
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					}
 					Instruction::Rsb{dst, lhs}
@@ -512,7 +512,7 @@ impl InstructionSet for Arm6M
 					_ =>
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					},
 				}
@@ -529,7 +529,7 @@ impl InstructionSet for Arm6M
 					_ =>
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{value: err, line, col});
+						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					},
 				}
@@ -541,7 +541,7 @@ impl InstructionSet for Arm6M
 			"YIELD" => convert!({Instruction::Yield}),
 			_ =>
 			{
-				ctx.push_error(Positioned{value: InstrErrorKind::NoSuchInstruction(name.to_owned()), line, col});
+				ctx.push_error(Positioned{line, col, value: InstrErrorKind::NoSuchInstruction(name.to_owned())});
 				return Err(ErrorLevel::Fatal);
 			},
 		};
@@ -553,13 +553,13 @@ impl InstructionSet for Arm6M
 			{
 				if let Err(e) = active.write(&tmp[..len])
 				{
-					ctx.push_error(Positioned{value: InstrErrorKind::Write(e), line, col});
+					ctx.push_error(Positioned{line, col, value: InstrErrorKind::Write(e)});
 					return Err(ErrorLevel::Fatal);
 				}
 			},
 			Err(e) =>
 			{
-				ctx.push_error(Positioned{value: InstrErrorKind::Generic(Box::new(e)), line, col});
+				ctx.push_error(Positioned{line, col, value: InstrErrorKind::Generic(Box::new(e))});
 				return Err(ErrorLevel::Fatal);
 			},
 		}
@@ -578,7 +578,7 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 	{
 		None =>
 		{
-			ctx.push_error(Positioned{value: LabelError::NotFound(label.to_owned()), line, col});
+			ctx.push_error(Positioned{line, col, value: LabelError::NotFound(label.to_owned())});
 			return;
 		},
 		Some(&t) => t,
@@ -591,11 +591,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let al_pc = (addr & !0b11).wrapping_add(4);
 			if tgt < al_pc || tgt - al_pc > 0xFF << 2
 			{
-				ctx.push_error(Positioned{value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}});
 			}
 			else if ((tgt - al_pc) & 0b11) != 0
 			{
-				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}});
 			}
 			else {*off = (tgt - al_pc) as u16;}
 		},
@@ -606,11 +606,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
 			if off_val < min || off_val > max
 			{
-				ctx.push_error(Positioned{value: LabelError::Range{min, max, have: off_val}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Range{min, max, have: off_val}});
 			}
 			else if (off_val & 0b1) != 0
 			{
-				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b10, have: off_val}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b10, have: off_val}});
 			}
 			else {*off = off_val as i32}
 		},
@@ -621,11 +621,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let (min, max) = (-1 << 24, (1 << 24) - 1);
 			if off_val < min || off_val > max
 			{
-				ctx.push_error(Positioned{value: LabelError::Range{min, max, have: off_val}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Range{min, max, have: off_val}});
 			}
 			else if (off_val & 0b1) != 0
 			{
-				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b10, have: off_val}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b10, have: off_val}});
 			}
 			else {*off = off_val as i32}
 		},
@@ -634,11 +634,11 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 			let al_pc = (addr & !0b11).wrapping_add(4);
 			if tgt < al_pc || tgt - al_pc > 0xFF << 2
 			{
-				ctx.push_error(Positioned{value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}});
 			}
 			else if ((tgt - al_pc) & 0b11) != 0
 			{
-				ctx.push_error(Positioned{value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}, line, col});
+				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}});
 			}
 			else {*off = ImmReg::Immediate((tgt - al_pc) as i32);}
 		},
@@ -652,12 +652,12 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 		{
 			if let Err(e) = ctx.output_mut().put(addr, &tmp[..len])
 			{
-				ctx.push_error(Positioned{value: InstrErrorKind::Generic(Box::new(e)), line, col});
+				ctx.push_error(Positioned{line, col, value: InstrErrorKind::Generic(Box::new(e))});
 			}
 		},
 		Err(e) =>
 		{
-			ctx.push_error(Positioned{value: InstrErrorKind::Generic(Box::new(e)), line, col});
+			ctx.push_error(Positioned{line, col, value: InstrErrorKind::Generic(Box::new(e))});
 		},
 	}
 }

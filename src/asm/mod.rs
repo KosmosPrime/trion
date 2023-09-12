@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::asm::directive::DirectiveList;
 use crate::asm::instr::InstructionSet;
 use crate::asm::mem::map::{MemoryMap, PutError, Search};
-use crate::text::Positioned;
+use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ElementValue, Parser, ParseErrorKind};
 
 pub mod directive;
@@ -29,7 +29,7 @@ pub struct Context<'l>
 	active: Segment,
 	labels: HashMap<String, u32>,
 	tasks: Vec<Box<dyn FnOnce(&mut Context)>>,
-	errors: Vec<Box<dyn Error + 'static>>,
+	errors: Vec<Box<PosNamed<dyn Error>>>,
 }
 
 impl<'l> Context<'l>
@@ -163,7 +163,7 @@ impl<'l> Context<'l>
 			{
 				ElementValue::Directive{name, args} =>
 				{
-					if let Err(e) = self.directives.process(self, Positioned{value: (name, args.as_slice()), line: element.line, col: element.col})
+					if let Err(e) = self.directives.process(self, Positioned{line: element.line, col: element.col, value: (name, args.as_slice())})
 					{
 						return Err(e);
 					}
@@ -189,7 +189,7 @@ impl<'l> Context<'l>
 				{
 					if self.active().is_none()
 					{
-						self.push_error(Positioned{value: AsmErrorKind::Inactive, line: element.line, col: element.line});
+						self.push_error(Positioned{line: element.line, col: element.line, value: AsmErrorKind::Inactive});
 						return Err(ErrorLevel::Fatal);
 					}
 					if let Err(e) = self.assemble_instr(element.line, element.col, name, args)
@@ -236,10 +236,11 @@ impl<'l> Context<'l>
 	
 	pub fn push_error<T: Error + 'static>(&mut self, error: Positioned<T>)
 	{
-		self.errors.push(Box::new(error));
+		let name = self.path_stack.last().map_or_else(String::new, |p| p.to_string_lossy().into_owned());
+		self.errors.push(Box::new(error.with_name(name)));
 	}
 	
-	pub fn get_errors(&self) -> &[Box<dyn Error>]
+	pub fn get_errors(&self) -> &[Box<PosNamed<dyn Error>>]
 	{
 		self.errors.as_ref()
 	}

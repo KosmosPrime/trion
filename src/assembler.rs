@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::path::PathBuf;
 
 use crate::arm6m::Arm6M;
