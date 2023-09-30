@@ -10,7 +10,7 @@ use crate::text::parse::{Argument, ArgumentType};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Global
 {
-	Global,
+	Global, Import,
 }
 
 impl Directive for Global
@@ -20,6 +20,7 @@ impl Directive for Global
 		match self
 		{
 			Self::Global => "global",
+			Self::Import => "import",
 		}
 	}
 	
@@ -84,6 +85,36 @@ impl Directive for Global
 						Err(e) => unreachable!("{e:?}"),
 					}
 				}), Realm::Local);
+			},
+			Self::Import =>
+			{
+				let value = match ctx.get_constant(name, Realm::Global)
+				{
+					Lookup::NotFound =>
+					{
+						let err = Box::new(GlobalError::NotFound{name: name.to_owned(), realm: Realm::Global});
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+						return Err(ErrorLevel::Fatal);
+					},
+					Lookup::Deferred =>
+					{
+						let err = Box::new(GlobalError::Deferred{name: name.to_owned(), realm: Realm::Global});
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+						return Err(ErrorLevel::Fatal);
+					},
+					Lookup::Found(v) => v,
+				};
+				match ctx.insert_constant(name, value, Realm::Local)
+				{
+					Ok(..) => (),
+					Err(ConstantError::Duplicate{name, realm}) =>
+					{
+						let err = Box::new(GlobalError::Duplicate{name, realm});
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+						return Err(ErrorLevel::Fatal);
+					},
+					Err(e) => unreachable!("{e:?}"),
+				}
 			},
 		}
 		Ok(())

@@ -34,6 +34,7 @@ impl DirectiveList
 		list.register(Box::new(data::DataStr)).unwrap();
 		list.register(Box::new(data::DataFile)).unwrap();
 		list.register(Box::new(global::Global::Global)).unwrap();
+		list.register(Box::new(global::Global::Import)).unwrap();
 		list.register(Box::new(include::Include)).unwrap();
 		list
 	}
