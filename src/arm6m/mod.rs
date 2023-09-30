@@ -301,7 +301,7 @@ impl InstructionSet for Arm6M
 			"ASRS" => convert!(dst: Register, value: Register, shift: ImmReg{Instruction::Asr{dst, value, shift}}),
 			"B" | "BEQ" | "BNE" | "BCS" | "BHS" | "BCC" | "BLO" | "BMI" | "BPL" | "BVS" | "BVC" | "BHI" | "BLS" | "BGE" | "BLT" | "BGT" | "BLE" =>
 			{
-				let cond = match name
+				let cond = match temp_name
 				{
 					"BEQ" => Condition::Equal,
 					"BNE" => Condition::NonEqual,
@@ -356,20 +356,20 @@ impl InstructionSet for Arm6M
 			{
 				convert!(pm: Identifier
 				{
-					if pm != "i"
+					if pm.eq_ignore_ascii_case("i")
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
 						ctx.push_error(Positioned{line, col, value: err});
 						return Err(ErrorLevel::Fatal);
 					}
 				});
-				Instruction::Cps{enable: name == "CPSIE"}
+				Instruction::Cps{enable: temp_name == "CPSIE"}
 			},
 			"DMB" =>
 			{
 				convert!(opt: Identifier
 				{
-					if opt != "SV"
+					if !opt.eq_ignore_ascii_case("SV")
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
 						ctx.push_error(Positioned{line, col, value: err});
@@ -382,7 +382,7 @@ impl InstructionSet for Arm6M
 			{
 				convert!(opt: Identifier
 				{
-					if opt != "SV"
+					if !opt.eq_ignore_ascii_case("SV")
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
 						ctx.push_error(Positioned{line, col, value: err});
@@ -396,7 +396,7 @@ impl InstructionSet for Arm6M
 			{
 				convert!(opt: Identifier
 				{
-					if opt != "SV"
+					if !opt.eq_ignore_ascii_case("SV")
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
 						ctx.push_error(Positioned{line, col, value: err});
@@ -426,7 +426,7 @@ impl InstructionSet for Arm6M
 			{
 				convert!(dst: Register, addr: Address
 				{
-					match name
+					match temp_name
 					{
 						"LDRB" => Instruction::Ldrb{dst, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
 						"LDRH" => Instruction::Ldrh{dst, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
@@ -495,7 +495,7 @@ impl InstructionSet for Arm6M
 			{
 				convert!(src: Register, addr: Address
 				{
-					match name
+					match temp_name
 					{
 						"STR" => Instruction::Str{src, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
 						"STRB" => Instruction::Strb{src, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
@@ -525,8 +525,8 @@ impl InstructionSet for Arm6M
 			{
 				match convert!(info: Immediate{info})
 				{
-					info @ 0.. if info <= u8::MAX as i32 && name.as_bytes()[name.len() - 1] != b'W' => Instruction::Udf{info: info as u8},
-					info @ 0.. if info <= u16::MAX as i32 && name.as_bytes()[name.len() - 1] != b'N' => Instruction::Udfw{info: info as u16},
+					info @ 0.. if info <= u8::MAX as i32 && temp_name.as_bytes()[name.len() - 1] != b'W' => Instruction::Udf{info: info as u8},
+					info @ 0.. if info <= u16::MAX as i32 && temp_name.as_bytes()[name.len() - 1] != b'N' => Instruction::Udfw{info: info as u16},
 					_ =>
 					{
 						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
