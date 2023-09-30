@@ -8,6 +8,7 @@ use crate::text::parse::{Argument, ArgumentType};
 
 pub mod addr;
 pub mod align;
+pub mod constant;
 pub mod data;
 pub mod global;
 pub mod include;
@@ -27,6 +28,7 @@ impl DirectiveList
 		let mut list = Self::new();
 		list.register(Box::new(addr::Addr)).unwrap();
 		list.register(Box::new(align::Align)).unwrap();
+		list.register(Box::new(constant::Const)).unwrap();
 		list.register(Box::new(data::DataU8)).unwrap();
 		list.register(Box::new(data::DataU16)).unwrap();
 		list.register(Box::new(data::DataU32)).unwrap();
