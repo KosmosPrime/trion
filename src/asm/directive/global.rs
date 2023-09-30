@@ -10,7 +10,7 @@ use crate::text::parse::{Argument, ArgumentType};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Global
 {
-	Global, Import,
+	Global, Import, Export,
 }
 
 impl Directive for Global
@@ -21,6 +21,7 @@ impl Directive for Global
 		{
 			Self::Global => "global",
 			Self::Import => "import",
+			Self::Export => "export",
 		}
 	}
 	
@@ -87,25 +88,27 @@ impl Directive for Global
 					}
 				}), Realm::Local);
 			},
-			Self::Import =>
+			Self::Import | Self::Export =>
 			{
-				let value = match ctx.get_constant(name, Realm::Global)
+				let src_realm = if *self == Self::Export {Realm::Local} else {Realm::Global};
+				let dst_realm = if *self == Self::Export {Realm::Global} else {Realm::Local};
+				let value = match ctx.get_constant(name, src_realm)
 				{
 					Lookup::NotFound =>
 					{
-						let source = Box::new(GlobalError::NotFound{name: name.to_owned(), realm: Realm::Global});
+						let source = Box::new(GlobalError::NotFound{name: name.to_owned(), realm: src_realm});
 						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 					Lookup::Deferred =>
 					{
-						let source = Box::new(GlobalError::Deferred{name: name.to_owned(), realm: Realm::Global});
+						let source = Box::new(GlobalError::Deferred{name: name.to_owned(), realm: src_realm});
 						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 					Lookup::Found(v) => v,
 				};
-				match ctx.insert_constant(name, value, Realm::Local)
+				match ctx.insert_constant(name, value, dst_realm)
 				{
 					Ok(..) => (),
 					Err(ConstantError::Duplicate{name, realm}) =>
