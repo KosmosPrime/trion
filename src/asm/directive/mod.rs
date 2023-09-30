@@ -78,7 +78,7 @@ pub enum DirectiveErrorKind
 	NotFound(String),
 	ArgumentCount{min: Option<usize>, max: Option<usize>, have: usize},
 	Argument{idx: usize, expect: ArgumentType, have: ArgumentType},
-	Apply(Box<dyn Error + 'static>),
+	Apply{name: String, source: Box<dyn Error + 'static>},
 }
 
 impl fmt::Display for DirectiveErrorKind
@@ -101,7 +101,7 @@ impl fmt::Display for DirectiveErrorKind
 				write!(f, "got {have})")
 			},
 			Self::Argument{idx, expect, have} => write!(f, "invalid argument #{idx} (expect {expect}, got {have})"),
-			Self::Apply(..) => f.write_str("directive application failed"),
+			Self::Apply{name, ..} => write!(f, "failed to apply .{name}"),
 		}
 	}
 }
@@ -112,7 +112,7 @@ impl Error for DirectiveErrorKind
 	{
 		match self
 		{
-			Self::Apply(source) => Some(source.as_ref()),
+			Self::Apply{source, ..} => Some(source.as_ref()),
 			_ => None,
 		}
 	}

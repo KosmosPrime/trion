@@ -22,7 +22,8 @@ impl Directive for Align
 		let Some(active) = ctx.active_mut()
 		else
 		{
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Inactive))));
+			let source = Box::new(AlignError::Inactive);
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		};
 		if args.value.len() != 1
@@ -40,7 +41,8 @@ impl Directive for Align
 					Ok(val) if val > 0 => val,
 					_ =>
 					{
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Range(val)))));
+						let source = Box::new(AlignError::Range(val));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 				}
@@ -61,8 +63,8 @@ impl Directive for Align
 					const PADDING: [u8; 256] = [0xBE; 256];
 					if !active.has_remaining(new_len)
 					{
-						let err = Box::new(AlignError::Write(SegmentError::Overflow{need: new_len, have: active.remaining()}));
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+						let source = Box::new(AlignError::Write(SegmentError::Overflow{need: new_len, have: active.remaining()}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					}
 					for p in (0..new_len).step_by(256)
@@ -71,15 +73,16 @@ impl Directive for Align
 						else {active.write(&PADDING[..new_len - p])};
 						if let Err(e) = result
 						{
-							ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AlignError::Write(e)))));
+							let source = Box::new(AlignError::Write(e));
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 							return Err(ErrorLevel::Fatal);
 						}
 					}
 				},
 				Err(..) =>
 				{
-					let err = Box::new(AlignError::Overflow{need: len - off, have: active.remaining()});
-					ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+					let source = Box::new(AlignError::Overflow{need: len - off, have: active.remaining()});
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 					return Err(ErrorLevel::Fatal);
 				},
 			}

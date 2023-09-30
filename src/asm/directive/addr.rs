@@ -31,7 +31,8 @@ impl Directive for Addr
 				let &Number::Integer(val) = num;
 				let Ok(val) = u32::try_from(val) else
 				{
-					ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AddrError::Range(val)))));
+					let source = Box::new(AddrError::Range(val));
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 					return Err(ErrorLevel::Fatal);
 				};
 				val
@@ -44,7 +45,8 @@ impl Directive for Addr
 		};
 		if let Err(e) = ctx.change_segment(tgt)
 		{
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply(Box::new(AddrError::Segment(e)))));
+			let source = Box::new(AddrError::Segment(e));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		}
 		Ok(())

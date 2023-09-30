@@ -50,22 +50,22 @@ impl Directive for Include
 			Ok(f) => f,
 			Err(err) =>
 			{
-				let err = Box::new(IncludeError::NoSuchFile{path, err});
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+				let source = Box::new(IncludeError::NoSuchFile{path, err});
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},
 		};
 		let mut data = Vec::new();
 		if let Err(err) = f.read_to_end(&mut data)
 		{
-			let err = Box::new(IncludeError::FileRead{path, err});
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+			let source = Box::new(IncludeError::FileRead{path, err});
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		}
 		if let (Err(..), path) = ctx.assemble(data.as_ref(), path)
 		{
-			let err = Box::new(IncludeError::AssemblyFailed{path});
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply(err)));
+			let source = Box::new(IncludeError::AssemblyFailed{path});
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		}
 		Ok(())
