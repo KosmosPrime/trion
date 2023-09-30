@@ -76,6 +76,20 @@ pub struct PosNamed<T: ?Sized>
 	pub value: T,
 }
 
+impl<T> PosNamed<T>
+{
+	pub fn convert<R>(self, value: R) -> PosNamed<R>
+	{
+		PosNamed{name: self.name, line: self.line, col: self.col, value}
+	}
+	
+	pub fn convert_fn<R>(self, func: impl FnOnce(T) -> R) -> PosNamed<R>
+	{
+		let PosNamed{name, line, col, value} = self;
+		PosNamed{name, line, col, value: func(value)}
+	}
+}
+
 impl<T: fmt::Display + ?Sized> fmt::Display for PosNamed<T>
 {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result

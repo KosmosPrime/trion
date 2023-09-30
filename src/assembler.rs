@@ -40,8 +40,7 @@ pub fn assemble(buff: &mut Vec<u8>, path: PathBuf) -> bool
 		return false;
 	}
 	
-	if !ctx.has_errored() {ctx.run_tasks();}
-	if ctx.has_errored()
+	if !ctx.finalize()
 	{
 		for err in ctx.get_errors()
 		{

@@ -4,12 +4,14 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use crate::asm::constant::{Lookup, Realm};
 use crate::asm::directive::DirectiveList;
 use crate::asm::instr::InstructionSet;
 use crate::asm::mem::map::{MemoryMap, PutError, Search};
 use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ElementValue, Parser, ParseErrorKind};
 
+pub mod constant;
 pub mod directive;
 pub mod instr;
 pub mod mem;
@@ -27,8 +29,10 @@ pub struct Context<'l>
 	directives: &'l DirectiveList,
 	output: MemoryMap,
 	active: Segment,
-	labels: HashMap<String, u32>,
-	tasks: Vec<Box<dyn FnOnce(&mut Context)>>,
+	globals: HashMap<String, Option<i64>>,
+	locals: Option<HashMap<String, Option<i64>>>,
+	global_tasks: Vec<Box<dyn FnOnce(&mut Context)>>,
+	local_tasks: Option<Vec<Box<dyn FnOnce(&mut Context)>>>,
 	errors: Vec<Box<PosNamed<dyn Error>>>,
 }
 
@@ -43,8 +47,10 @@ impl<'l> Context<'l>
 			directives,
 			output: MemoryMap::new(),
 			active: Segment::Inactive(Vec::new()),
-			labels: HashMap::new(),
-			tasks: Vec::new(),
+			globals: HashMap::new(),
+			locals: None,
+			global_tasks: Vec::new(),
+			local_tasks: None,
 			errors: Vec::new(),
 		}
 	}
@@ -135,14 +141,91 @@ impl<'l> Context<'l>
 		}
 	}
 	
-	pub fn labels(&self) -> &HashMap<String, u32>
+	pub fn get_constant(&self, name: &str, realm: Realm) -> Lookup
 	{
-		&self.labels
+		let constants = match realm
+		{
+			Realm::Global => &self.globals,
+			Realm::Local =>
+			{
+				match self.locals
+				{
+					None => panic!("no local scope"),
+					Some(ref l) => l,
+				}
+			},
+		};
+		match constants.get(name)
+		{
+			None => Lookup::NotFound,
+			Some(None) => Lookup::Deferred,
+			Some(&Some(v)) => Lookup::Found(v),
+		}
 	}
 	
-	pub fn labels_mut(&mut self) -> &mut HashMap<String, u32>
+	pub fn insert_constant(&mut self, name: &str, value: i64, realm: Realm) -> Result<bool, ConstantError>
 	{
-		&mut self.labels
+		let constants = match realm
+		{
+			Realm::Global => &mut self.globals,
+			Realm::Local =>
+			{
+				match self.locals
+				{
+					None => panic!("no local scope"),
+					Some(ref mut l) => l,
+				}
+			},
+		};
+		match constants.get_mut(name)
+		{
+			None =>
+			{
+				constants.insert(name.to_owned(), Some(value));
+				Ok(true)
+			},
+			Some(dst @ None) =>
+			{
+				*dst = Some(value);
+				Ok(false)
+			},
+			Some(Some(..)) => Err(ConstantError::Duplicate{name: name.to_owned(), realm}),
+		}
+	}
+	
+	pub fn replace_constant(&mut self, name: &str, value: i64, realm: Realm) -> Lookup
+	{
+		let constants = match realm
+		{
+			Realm::Global => &mut self.globals,
+			Realm::Local =>
+			{
+				match self.locals
+				{
+					None => panic!("no local scope"),
+					Some(ref mut l) => l,
+				}
+			},
+		};
+		match constants.get_mut(name)
+		{
+			None =>
+			{
+				constants.insert(name.to_owned(), Some(value));
+				Lookup::NotFound
+			},
+			Some(dst @ None) =>
+			{
+				*dst = Some(value);
+				Lookup::Deferred
+			},
+			Some(Some(have)) =>
+			{
+				let prev = *have;
+				*have = value;
+				Lookup::Found(prev)
+			},
+		}
 	}
 	
 	fn do_assemble<'s>(&'s mut self, data: &[u8]) -> Result<(), ErrorLevel>
@@ -179,9 +262,9 @@ impl<'l> Context<'l>
 						},
 						Some(seg) => seg.curr_addr(),
 					};
-					if self.labels.insert(name.to_owned(), curr_addr).is_some()
+					if let Err(e) = self.insert_constant(name, i64::from(curr_addr), Realm::Local)
 					{
-						self.push_error(element.convert(AsmErrorKind::DuplicateLabel(name.to_owned())));
+						self.push_error(element.convert(e));
 						return Err(ErrorLevel::Fatal);
 					}
 				},
@@ -206,8 +289,22 @@ impl<'l> Context<'l>
 	{
 		self.path_stack.push(path);
 		let count = NonZeroUsize::try_from(self.path_stack.len()).unwrap();
-		let frame = PathFrame{ctx: self, count: Some(count)};
+		let constants = core::mem::replace(&mut self.locals, Some(HashMap::new())).map(|c| core::mem::replace(&mut self.globals, c));
+		let tasks = core::mem::replace(&mut self.local_tasks, Some(Vec::new())).map(|t| core::mem::replace(&mut self.global_tasks, t));
+		let mut frame = PathFrame{ctx: self, count: Some(count), constants, tasks};
 		let result = frame.ctx.do_assemble(data);
+		if result != Err(ErrorLevel::Fatal)
+		{
+			let mut tasks = frame.ctx.local_tasks.replace(Vec::new()).unwrap();
+			while !tasks.is_empty()
+			{
+				for task in tasks.drain(..)
+				{
+					task(&mut frame.ctx);
+				}
+				core::mem::swap(frame.ctx.local_tasks.as_mut().unwrap(), &mut tasks);
+			}
+		}
 		(result, frame.into_inner())
 	}
 	
@@ -216,22 +313,43 @@ impl<'l> Context<'l>
 		self.instructions.assemble(self, line, col, name, args)
 	}
 	
-	pub fn add_task(&mut self, task: Box<dyn FnOnce(&mut Context)>)
+	pub fn add_task(&mut self, task: Box<dyn FnOnce(&mut Context)>, realm: Realm)
 	{
-		self.tasks.push(task)
+		let tasks = match realm
+		{
+			Realm::Global => &mut self.global_tasks,
+			Realm::Local =>
+			{
+				match self.local_tasks
+				{
+					None => panic!("no local scope"),
+					Some(ref mut l) => l,
+				}
+			},
+		};
+		tasks.push(task);
 	}
 	
-	pub fn run_tasks(&mut self)
+	pub fn finalize(&mut self) -> bool
 	{
-		for task in core::mem::replace(&mut self.tasks, Vec::new())
+		if !self.has_errored()
 		{
-			task(self);
+			for task in core::mem::replace(&mut self.global_tasks, Vec::new())
+			{
+				task(self);
+			}
 		}
+		!self.has_errored()
 	}
 	
 	pub fn has_errored(&self) -> bool
 	{
 		!self.errors.is_empty()
+	}
+	
+	pub fn get_errors(&self) -> &[Box<PosNamed<dyn Error>>]
+	{
+		self.errors.as_ref()
 	}
 	
 	pub fn push_error<T: Error + 'static>(&mut self, error: Positioned<T>)
@@ -240,25 +358,29 @@ impl<'l> Context<'l>
 		self.errors.push(Box::new(error.with_name(name)));
 	}
 	
-	pub fn get_errors(&self) -> &[Box<PosNamed<dyn Error>>]
+	pub fn push_error_in<T: Error + 'static>(&mut self, error: PosNamed<T>)
 	{
-		self.errors.as_ref()
+		self.errors.push(Box::new(error));
 	}
 }
 
 struct PathFrame<'l, 'c: 'l>
 {
 	ctx: &'l mut Context<'c>,
-	count: Option<NonZeroUsize>
+	count: Option<NonZeroUsize>,
+	constants: Option<HashMap<String, Option<i64>>>,
+	tasks: Option<Vec<Box<dyn FnOnce(&mut Context)>>>,
 }
 
 impl<'l, 'c: 'l> PathFrame<'l, 'c>
 {
-	pub fn into_inner(self) -> PathBuf
+	pub fn into_inner(mut self) -> PathBuf
 	{
 		let count = self.count.unwrap();
-		assert!(self.ctx.path_stack.len() == count.get());
+		assert_eq!(self.ctx.path_stack.len(), count.get());
 		let buff = self.ctx.path_stack.pop().unwrap();
+		self.ctx.locals = self.constants.take().map(|c| core::mem::replace(&mut self.ctx.globals, c));
+		self.ctx.local_tasks = self.tasks.take().map(|t| core::mem::replace(&mut self.ctx.global_tasks, t));
 		// this replaces drop as this call takes the value back out
 		core::mem::forget(self);
 		buff
@@ -273,6 +395,8 @@ impl<'l, 'c: 'l> Drop for PathFrame<'l, 'c>
 		{
 			assert!(self.ctx.path_stack.len() == count.get());
 			self.ctx.path_stack.pop();
+			self.ctx.locals = self.constants.take().map(|c| core::mem::replace(&mut self.ctx.globals, c));
+			self.ctx.local_tasks = self.tasks.take().map(|t| core::mem::replace(&mut self.ctx.global_tasks, t));
 		}
 	}
 }
@@ -382,30 +506,61 @@ impl ActiveSegment
 			Err(SegmentError::Overflow{need: data.len(), have: self.remaining()})
 		}
 	}
+	
+	pub fn write_at(&mut self, addr: u32, data: &[u8]) -> Result<(), SegmentError>
+	{
+		assert!(addr >= self.base_addr && addr <= self.curr_addr());
+		// safe cast because `Self::curr_addr` uses the buffer's length (usize)
+		let start = (addr - self.base_addr) as usize;
+		if self.buffer.len() - start < data.len()
+		{
+			let overwrite = self.buffer.len() - start;
+			if !self.has_remaining(overwrite)
+			{
+				return Err(SegmentError::Overflow{need: data.len() - overwrite, have: self.remaining()});
+			}
+			// mixed overwrite & append, truncate to simplify into only appending
+			self.buffer.truncate(start);
+			self.buffer.extend_from_slice(data);
+		}
+		else if start < self.buffer.len()
+		{
+			// all contained within the buffer, overwrite only
+			self.buffer[start..start + data.len()].copy_from_slice(data);
+		}
+		else
+		{
+			// all appended to the buffer, no overwrite
+			self.buffer.extend_from_slice(data);
+		}
+		Ok(())
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LabelError
+pub enum ConstantError
 {
-	NotFound(String),
+	NotFound{name: String, realm: Realm},
+	Duplicate{name: String, realm: Realm},
 	Range{min: i64, max: i64, have: i64},
 	Alignment{align: u32, have: i64},
 }
 
-impl fmt::Display for LabelError
+impl fmt::Display for ConstantError
 {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
 	{
-		match self
+		match *self
 		{
-			Self::NotFound(name) => write!(f, "no such label {name:?}"),
+			Self::NotFound{ref name, realm} => write!(f, "no such {realm} constant {name:?}"),
+			Self::Duplicate{ref name, realm} => write!(f, "duplicate {realm} constant {name}"),
 			Self::Range{min, max, have} => write!(f, "label out of range ({min} to {max}, got {have})"),
 			Self::Alignment{align, have} => write!(f, "misaligned label (expect {align}, got {have})"),
 		}
 	}
 }
 
-impl Error for LabelError {}
+impl Error for ConstantError {}
 
 pub type AssembleError = Positioned<AsmErrorKind>;
 
@@ -414,7 +569,6 @@ pub enum AsmErrorKind
 {
 	Parse(ParseErrorKind),
 	Inactive,
-	DuplicateLabel(String),
 }
 
 impl fmt::Display for AsmErrorKind
@@ -425,7 +579,6 @@ impl fmt::Display for AsmErrorKind
 		{
 			Self::Parse(..) => f.write_str("parsing failed"),
 			Self::Inactive => f.write_str("no active segment"),
-			Self::DuplicateLabel(name) => write!(f, "duplicate label {name:?}"),
 		}
 	}
 }

@@ -3,9 +3,10 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
-use crate::asm::{Context, ErrorLevel, LabelError};
+use crate::asm::{ConstantError, Context, ErrorLevel};
+use crate::asm::constant::{Lookup, Realm};
 use crate::asm::instr::{InstructionSet, InstrErrorKind};
-use crate::text::Positioned;
+use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
 
@@ -565,80 +566,114 @@ impl InstructionSet for Arm6M
 		}
 		if let Some(label) = defer_label
 		{
+			let addr = PosNamed
+			{
+				name: ctx.curr_path().unwrap().to_string_lossy().into_owned(),
+				line,
+				col,
+				value: curr_addr,
+			};
 			let label = label.to_owned();
-			ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, line, col, curr_addr, instr, label.as_str())));
+			ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, addr, instr, label)), Realm::Local);
 		}
 		Ok(())
 	}
 }
 
-fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: Instruction, label: &str)
+fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction, label: String)
 {
-	let tgt = match ctx.labels().get(label)
+	let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
+	let tgt = match ctx.get_constant(label.as_str(), realm)
 	{
-		None =>
+		Lookup::NotFound =>
 		{
-			ctx.push_error(Positioned{line, col, value: LabelError::NotFound(label.to_owned())});
+			// needing a constant which doesn't exist
+			ctx.push_error_in(addr.convert(ConstantError::NotFound{name: label, realm}));
 			return;
 		},
-		Some(&t) => t,
+		Lookup::Deferred =>
+		{
+			// the constant could be set by a different module later
+			ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, addr, instr, label)), Realm::Global);
+			return;
+		},
+		Lookup::Found(have) =>
+		{
+			match u32::try_from(have)
+			{
+				Ok(v) => v,
+				Err(..) =>
+				{
+					ctx.push_error_in(addr.convert(ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}));
+					return;
+				},
+			}
+		},
 	};
 	
 	match instr
 	{
 		Instruction::Adr{ref mut off, ..} =>
 		{
-			let al_pc = (addr & !0b11).wrapping_add(4);
+			let al_pc = (addr.value & !0b11).wrapping_add(4);
 			if tgt < al_pc || tgt - al_pc > 0xFF << 2
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}});
+				ctx.push_error_in(addr.convert(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}));
+				return;
 			}
 			else if ((tgt - al_pc) & 0b11) != 0
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}});
+				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}));
+				return;
 			}
 			else {*off = (tgt - al_pc) as u16;}
 		},
 		Instruction::B{cond, ref mut off} =>
 		{
-			let pc = addr.wrapping_add(4);
+			let pc = addr.value.wrapping_add(4);
 			let off_val = i64::from(tgt) - i64::from(pc);
 			let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
 			if off_val < min || off_val > max
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Range{min, max, have: off_val}});
+				ctx.push_error_in(addr.convert(ConstantError::Range{min, max, have: off_val}));
+				return;
 			}
 			else if (off_val & 0b1) != 0
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b10, have: off_val}});
+				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b10, have: off_val}));
+				return;
 			}
 			else {*off = off_val as i32}
 		},
 		Instruction::Bl{ref mut off} =>
 		{
-			let pc = addr.wrapping_add(4);
+			let pc = addr.value.wrapping_add(4);
 			let off_val = i64::from(tgt) - i64::from(pc);
 			let (min, max) = (-1 << 24, (1 << 24) - 1);
 			if off_val < min || off_val > max
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Range{min, max, have: off_val}});
+				ctx.push_error_in(addr.convert(ConstantError::Range{min, max, have: off_val}));
+				return;
 			}
 			else if (off_val & 0b1) != 0
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b10, have: off_val}});
+				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b10, have: off_val}));
+				return;
 			}
 			else {*off = off_val as i32}
 		},
 		Instruction::Ldr{addr: Register::PC, ref mut off, ..} =>
 		{
-			let al_pc = (addr & !0b11).wrapping_add(4);
+			let al_pc = (addr.value & !0b11).wrapping_add(4);
 			if tgt < al_pc || tgt - al_pc > 0xFF << 2
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}});
+				ctx.push_error_in(addr.convert(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}));
+				return;
 			}
 			else if ((tgt - al_pc) & 0b11) != 0
 			{
-				ctx.push_error(Positioned{line, col, value: LabelError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}});
+				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}));
+				return;
 			}
 			else {*off = ImmReg::Immediate((tgt - al_pc) as i32);}
 		},
@@ -650,14 +685,29 @@ fn deferred_instr(ctx: &mut Context, line: u32, col: u32, addr: u32, mut instr: 
 	{
 		Ok(len) =>
 		{
-			if let Err(e) = ctx.output_mut().put(addr, &tmp[..len])
+			match ctx.active_mut()
 			{
-				ctx.push_error(Positioned{line, col, value: InstrErrorKind::Generic(Box::new(e))});
+				Some(seg) if addr.value <= seg.curr_addr() && addr.value + (len as u32) > seg.base_addr() =>
+				{
+					// write to active segment if possible
+					if let Err(e) = seg.write_at(addr.value, &tmp[..len])
+					{
+						ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
+					}
+				},
+				_ =>
+				{
+					// otherwise write directly to output
+					if let Err(e) = ctx.output_mut().put(addr.value, &tmp[..len])
+					{
+						ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
+					}
+				},
 			}
 		},
 		Err(e) =>
 		{
-			ctx.push_error(Positioned{line, col, value: InstrErrorKind::Generic(Box::new(e))});
+			ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
 		},
 	}
 }
