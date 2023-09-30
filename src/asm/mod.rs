@@ -228,6 +228,28 @@ impl<'l> Context<'l>
 		}
 	}
 	
+	pub fn defer_constant(&mut self, name: &str, realm: Realm) -> Result<(), ConstantError>
+	{
+		let constants = match realm
+		{
+			Realm::Global => &mut self.globals,
+			Realm::Local =>
+			{
+				match self.locals
+				{
+					None => panic!("no local scope"),
+					Some(ref mut l) => l,
+				}
+			},
+		};
+		if constants.contains_key(name)
+		{
+			return Err(ConstantError::Duplicate{name: name.to_owned(), realm});
+		}
+		constants.insert(name.to_owned(), None);
+		Ok(())
+	}
+	
 	fn do_assemble<'s>(&'s mut self, data: &[u8]) -> Result<(), ErrorLevel>
 	{
 		for element in Parser::new(data)
