@@ -593,8 +593,16 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 		},
 		Lookup::Deferred =>
 		{
-			// the constant could be set by a different module later
-			ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, addr, instr, label)), Realm::Global);
+			if realm == Realm::Global
+			{
+				// we've reached the end of the stack, this constant won't be defined
+				ctx.push_error_in(addr.convert(ConstantError::NotFound{name: label, realm}));
+			}
+			else
+			{
+				// the constant could be set by a different module later
+				ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, addr, instr, label)), Realm::Global);
+			}
 			return;
 		},
 		Lookup::Found(have) =>
