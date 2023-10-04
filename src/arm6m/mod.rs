@@ -28,7 +28,6 @@ impl InstructionSet for Arm6M
 {
 	fn assemble<'c>(&self, ctx: &'c mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
-		let active = ctx.active_mut().unwrap();
 		let mut arg_pos = 0;
 		macro_rules!convert
 		{
@@ -286,7 +285,7 @@ impl InstructionSet for Arm6M
 			unsafe{core::str::from_utf8_unchecked(&temp_name[..name.len()])}
 		}
 		else {&""};
-		let instr = match temp_name
+		let mut instr = match temp_name
 		{
 			"ADCS" => convert!(dst: Register, rhs: Register{Instruction::Adc{dst, rhs}}),
 			"ADD" | "ADDS" => convert!(dst: Register, lhs: Register, rhs: ImmReg{Instruction::Add{flags: name.len() > 3, dst, lhs, rhs}}),
@@ -547,11 +546,41 @@ impl InstructionSet for Arm6M
 			},
 		};
 		let mut tmp = [0u8; 4];
-		let curr_addr = active.curr_addr();
+		let curr_addr = ctx.active().unwrap().curr_addr();
+		if let Some(label) = defer_label
+		{
+			if let Lookup::Found(have) = ctx.get_constant(label, Realm::Local)
+			{
+				match u32::try_from(have)
+				{
+					Ok(tgt) =>
+					{
+						match relocate_instr(curr_addr, tgt, &mut instr)
+						{
+							Ok(()) =>
+							{
+								defer_label = None;
+							},
+							Err(e) =>
+							{
+								ctx.push_error(Positioned{line, col, value: e});
+								return Err(ErrorLevel::Fatal);
+							},
+						}
+					},
+					Err(..) =>
+					{
+						ctx.push_error(Positioned{line, col, value: ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}});
+						return Err(ErrorLevel::Fatal);
+					},
+				}
+			}
+		}
 		match instr.write(&mut tmp)
 		{
 			Ok(len) =>
 			{
+				let active = ctx.active_mut().unwrap();
 				if let Err(e) = active.write(&tmp[..len])
 				{
 					ctx.push_error(Positioned{line, col, value: InstrErrorKind::Write(e)});
@@ -578,6 +607,71 @@ impl InstructionSet for Arm6M
 		}
 		Ok(())
 	}
+}
+
+fn relocate_instr(addr: u32, tgt: u32, instr: &mut Instruction) -> Result<(), ConstantError>
+{
+	match instr
+	{
+		Instruction::Adr{off, ..} =>
+		{
+			let al_pc = (addr & !0b11).wrapping_add(4);
+			if tgt < al_pc || tgt - al_pc > 0xFF << 2
+			{
+				return Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
+			}
+			else if ((tgt - al_pc) & 0b11) != 0
+			{
+				return Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
+			}
+			else {*off = (tgt - al_pc) as u16;}
+		},
+		&mut Instruction::B{cond, ref mut off} =>
+		{
+			let pc = addr.wrapping_add(4);
+			let off_val = i64::from(tgt) - i64::from(pc);
+			let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
+			if off_val < min || off_val > max
+			{
+				return Err(ConstantError::Range{min, max, have: off_val});
+			}
+			else if (off_val & 0b1) != 0
+			{
+				return Err(ConstantError::Alignment{align: 0b10, have: off_val});
+			}
+			else {*off = off_val as i32}
+		},
+		Instruction::Bl{off} =>
+		{
+			let pc = addr.wrapping_add(4);
+			let off_val = i64::from(tgt) - i64::from(pc);
+			let (min, max) = (-1 << 24, (1 << 24) - 1);
+			if off_val < min || off_val > max
+			{
+				return Err(ConstantError::Range{min, max, have: off_val});
+			}
+			else if (off_val & 0b1) != 0
+			{
+				return Err(ConstantError::Alignment{align: 0b10, have: off_val});
+			}
+			else {*off = off_val as i32}
+		},
+		Instruction::Ldr{addr: Register::PC, off, ..} =>
+		{
+			let al_pc = (addr & !0b11).wrapping_add(4);
+			if tgt < al_pc || tgt - al_pc > 0xFF << 2
+			{
+				return Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
+			}
+			else if ((tgt - al_pc) & 0b11) != 0
+			{
+				return Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
+			}
+			else {*off = ImmReg::Immediate((tgt - al_pc) as i32);}
+		},
+		_ => unreachable!("missing relocation handler for {instr:?}"),
+	}
+	Ok(())
 }
 
 fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction, label: String)
@@ -619,73 +713,14 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 		},
 	};
 	
-	match instr
+	match relocate_instr(addr.value, tgt, &mut instr)
 	{
-		Instruction::Adr{ref mut off, ..} =>
+		Ok(()) => (),
+		Err(e) =>
 		{
-			let al_pc = (addr.value & !0b11).wrapping_add(4);
-			if tgt < al_pc || tgt - al_pc > 0xFF << 2
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}));
-				return;
-			}
-			else if ((tgt - al_pc) & 0b11) != 0
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}));
-				return;
-			}
-			else {*off = (tgt - al_pc) as u16;}
+			ctx.push_error_in(addr.convert(e));
+			return;
 		},
-		Instruction::B{cond, ref mut off} =>
-		{
-			let pc = addr.value.wrapping_add(4);
-			let off_val = i64::from(tgt) - i64::from(pc);
-			let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
-			if off_val < min || off_val > max
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Range{min, max, have: off_val}));
-				return;
-			}
-			else if (off_val & 0b1) != 0
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b10, have: off_val}));
-				return;
-			}
-			else {*off = off_val as i32}
-		},
-		Instruction::Bl{ref mut off} =>
-		{
-			let pc = addr.value.wrapping_add(4);
-			let off_val = i64::from(tgt) - i64::from(pc);
-			let (min, max) = (-1 << 24, (1 << 24) - 1);
-			if off_val < min || off_val > max
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Range{min, max, have: off_val}));
-				return;
-			}
-			else if (off_val & 0b1) != 0
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b10, have: off_val}));
-				return;
-			}
-			else {*off = off_val as i32}
-		},
-		Instruction::Ldr{addr: Register::PC, ref mut off, ..} =>
-		{
-			let al_pc = (addr.value & !0b11).wrapping_add(4);
-			if tgt < al_pc || tgt - al_pc > 0xFF << 2
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64}));
-				return;
-			}
-			else if ((tgt - al_pc) & 0b11) != 0
-			{
-				ctx.push_error_in(addr.convert(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64}));
-				return;
-			}
-			else {*off = ImmReg::Immediate((tgt - al_pc) as i32);}
-		},
-		_ => unreachable!("missing deferred handler for {instr:?}"),
 	}
 	
 	let mut tmp = [0u8; 4];

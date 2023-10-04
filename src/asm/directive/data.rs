@@ -93,53 +93,39 @@ macro_rules!generate_expr
 					}
 				}
 				
-				let Some(active) = ctx.active_mut()
-				else
+				if ctx.active().is_none()
 				{
 					let source = Box::new(DataError::Inactive);
 					ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 					return Err(ErrorLevel::Fatal);
-				};
+				}
 				if args.value.len() != 1
 				{
 					ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
 					return Err(ErrorLevel::Trivial);
 				}
-				match args.value[0]
+				let value = match args.value[0]
 				{
-					Argument::Constant(ref num) =>
+					Argument::Constant(Number::Integer(v)) => v,
+					Argument::Identifier(name) =>
 					{
-						let &Number::Integer(val) = num;
-						match <$type>::try_from(val)
+						match ctx.get_constant(name, Realm::Local)
 						{
-							Ok(v) =>
+							Lookup::Found(v) => v,
+							_ =>
 							{
-								if let Err(e) = active.write(&write(v))
+								let addr = args.convert(ctx.curr_addr().unwrap()).with_name(ctx.curr_path().unwrap().to_string_lossy().into_owned());
+								let name = name.to_owned();
+								if let Err(e) = ctx.active_mut().unwrap().write(&[0; $size])
 								{
 									let source = Box::new(DataError::Write(e));
 									ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 									return Err(ErrorLevel::Fatal);
 								}
-							},
-							_ =>
-							{
-								let source = Box::new(DataError::Range{min: i64::from(<$type>::MIN), max: i64::from(<$type>::MAX), have: val});
-								ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
-								return Err(ErrorLevel::Fatal);
+								ctx.add_task(Box::new(move |ctx| deferred_write(ctx, addr, name)), Realm::Local);
+								return Ok(());
 							},
 						}
-					},
-					Argument::Identifier(name) =>
-					{
-						let addr = args.convert(ctx.curr_addr().unwrap()).with_name(ctx.curr_path().unwrap().to_string_lossy().into_owned());
-						let name = name.to_owned();
-						if let Err(e) = ctx.active_mut().unwrap().write(&[0; $size])
-						{
-							let source = Box::new(DataError::Write(e));
-							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
-							return Err(ErrorLevel::Fatal);
-						}
-						ctx.add_task(Box::new(move |ctx| deferred_write(ctx, addr, name)), Realm::Local);
 					},
 					ref arg =>
 					{
@@ -148,6 +134,24 @@ macro_rules!generate_expr
 						return Err(ErrorLevel::Trivial);
 					},
 				};
+				match <$type>::try_from(value)
+				{
+					Ok(v) =>
+					{
+						if let Err(e) = ctx.active_mut().unwrap().write(&write(v))
+						{
+							let source = Box::new(DataError::Write(e));
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+							return Err(ErrorLevel::Fatal);
+						}
+					},
+					_ =>
+					{
+						let source = Box::new(DataError::Range{min: i64::from(<$type>::MIN), max: i64::from(<$type>::MAX), have: value});
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						return Err(ErrorLevel::Fatal);
+					},
+				}
 				Ok(())
 			}
 		}
