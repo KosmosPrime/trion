@@ -259,7 +259,7 @@ impl<'l> Context<'l>
 				Ok(el) => el,
 				Err(e) =>
 				{
-					self.push_error(e);
+					self.push_error(e.convert_fn(AsmErrorKind::Parse));
 					return Err(ErrorLevel::Fatal);
 				},
 			};
