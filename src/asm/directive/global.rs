@@ -45,15 +45,16 @@ impl Directive for Global
 		{
 			Self::Global =>
 			{
-				match ctx.get_constant(name, Realm::Local)
+				match ctx.defer_constant(name, Realm::Local)
 				{
-					Lookup::Found(..) =>
+					Ok(()) => (),
+					Err(ConstantError::Duplicate{name, realm}) =>
 					{
-						let source = Box::new(GlobalError::Duplicate{name: name.to_owned(), realm: Realm::Local});
+						let source = Box::new(GlobalError::Duplicate{name, realm});
 						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
-					_ => (),
+					Err(e) => unreachable!("{e:?}"),
 				}
 				let name = name.to_owned();
 				let (line, col) = (args.line, args.col);
@@ -102,9 +103,26 @@ impl Directive for Global
 					},
 					Lookup::Deferred =>
 					{
-						let source = Box::new(GlobalError::Deferred{name: name.to_owned(), realm: src_realm});
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
-						return Err(ErrorLevel::Fatal);
+						if *self == Self::Import
+						{
+							match ctx.defer_constant(name, dst_realm)
+							{
+								Ok(()) => return Ok(()),
+								Err(ConstantError::Duplicate{name, realm}) =>
+								{
+									let source = Box::new(GlobalError::Duplicate{name, realm});
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+									return Err(ErrorLevel::Fatal);
+								},
+								Err(e) => unreachable!("{e:?}"),
+							}
+						}
+						else
+						{
+							let source = Box::new(GlobalError::Deferred{name: name.to_owned(), realm: src_realm});
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+							return Err(ErrorLevel::Fatal);
+						}
 					},
 					Lookup::Found(v) => v,
 				};
