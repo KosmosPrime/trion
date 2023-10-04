@@ -1,13 +1,162 @@
 use core::fmt;
+use core::mem::size_of;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
 
 use crate::asm::{Context, ErrorLevel, SegmentError};
+use crate::asm::constant::{Lookup, Realm};
 use crate::asm::directive::{Directive, DirectiveErrorKind};
-use crate::text::Positioned;
+use crate::asm::mem::map::PutError;
+use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
+
+macro_rules!generate_expr
+{
+	($name:ident($type:ty, $size:expr) as $label:literal => |$value:ident| {$($write:tt)+}) =>
+	{
+		#[derive(Clone, Copy, Debug)]
+		pub struct $name;
+		
+		impl Directive for $name
+		{
+			fn get_name(&self) -> &str
+			{
+				$label
+			}
+			
+			fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
+			{
+				fn write($value: $type) -> [u8; $size] {$($write)+}
+				
+				fn deferred_write(ctx: &mut Context, addr: PosNamed<u32>, name: String)
+				{
+					let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
+					match ctx.get_constant(name.as_str(), realm)
+					{
+						Lookup::NotFound =>
+						{
+							let source = Box::new(DataError::NotFound{name, realm});
+							ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+						},
+						Lookup::Deferred =>
+						{
+							if realm == Realm::Global
+							{
+								// we've reached the end of the stack, this constant won't be defined
+								let source = Box::new(DataError::NotFound{name, realm});
+								ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+							}
+							else
+							{
+								// the constant could be set by a different module later
+								ctx.add_task(Box::new(move |ctx| deferred_write(ctx, addr, name)), Realm::Global);
+							}
+						},
+						Lookup::Found(val) =>
+						{
+							match <$type>::try_from(val)
+							{
+								Ok(v) =>
+								{
+									let tmp = write(v);
+									match ctx.active_mut()
+									{
+										Some(seg) if addr.value <= seg.curr_addr() && addr.value + (tmp.len() as u32) > seg.base_addr() =>
+										{
+											// write to active segment if possible
+											if let Err(e) = seg.write_at(addr.value, &tmp[..])
+											{
+												let source = Box::new(DataError::Write(e));
+												ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+											}
+										},
+										_ =>
+										{
+											// otherwise write directly to output
+											if let Err(e) = ctx.output_mut().put(addr.value, &tmp[..])
+											{
+												let source = Box::new(DataError::Put(e));
+												ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+											}
+										},
+									}
+								},
+								_ =>
+								{
+									let source = Box::new(DataError::Range{min: i64::from(<$type>::MIN), max: i64::from(<$type>::MAX), have: val});
+									ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+								},
+							}
+						},
+					}
+				}
+				
+				let Some(active) = ctx.active_mut()
+				else
+				{
+					let source = Box::new(DataError::Inactive);
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+					return Err(ErrorLevel::Fatal);
+				};
+				if args.value.len() != 1
+				{
+					ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+					return Err(ErrorLevel::Trivial);
+				}
+				match args.value[0]
+				{
+					Argument::Constant(ref num) =>
+					{
+						let &Number::Integer(val) = num;
+						match <$type>::try_from(val)
+						{
+							Ok(v) =>
+							{
+								if let Err(e) = active.write(&write(v))
+								{
+									let source = Box::new(DataError::Write(e));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+									return Err(ErrorLevel::Fatal);
+								}
+							},
+							_ =>
+							{
+								let source = Box::new(DataError::Range{min: i64::from(<$type>::MIN), max: i64::from(<$type>::MAX), have: val});
+								ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+								return Err(ErrorLevel::Fatal);
+							},
+						}
+					},
+					Argument::Identifier(name) =>
+					{
+						let addr = args.convert(ctx.curr_addr().unwrap()).with_name(ctx.curr_path().unwrap().to_string_lossy().into_owned());
+						let name = name.to_owned();
+						if let Err(e) = ctx.active_mut().unwrap().write(&[0; $size])
+						{
+							let source = Box::new(DataError::Write(e));
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+							return Err(ErrorLevel::Fatal);
+						}
+						ctx.add_task(Box::new(move |ctx| deferred_write(ctx, addr, name)), Realm::Local);
+					},
+					ref arg =>
+					{
+						let err = DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have: arg.get_type()};
+						ctx.push_error(args.convert(err));
+						return Err(ErrorLevel::Trivial);
+					},
+				};
+				Ok(())
+			}
+		}
+	};
+}
+
+generate_expr!(DataU8(u8, size_of::<u8>()) as "du8" => |value| {[value as u8]});
+generate_expr!(DataU16(u16, size_of::<u16>()) as "du16" => |value| {u16::to_le_bytes(value)});
+generate_expr!(DataU32(u32, size_of::<u32>()) as "du32" => |value| {u32::to_le_bytes(value)});
 
 macro_rules!generate
 {
@@ -89,9 +238,6 @@ macro_rules!generate
 	};
 }
 
-generate!(DataU8(Constant(u8)) as "du8" => |self, ctx, active, args, value| {active.write(core::slice::from_ref(&(value as u8)))});
-generate!(DataU16(Constant(u16)) as "du16" => |self, ctx, active, args, value| {active.write(&u16::to_le_bytes(value))});
-generate!(DataU32(Constant(u32)) as "du32" => |self, ctx, active, args, value| {active.write(&u32::to_le_bytes(value))});
 generate!
 {
 	DataHex(String) as "dhex" => |self, ctx, active, args, in_hex|
@@ -234,11 +380,13 @@ generate!
 pub enum DataError
 {
 	Inactive,
+	NotFound{name: String, realm: Realm},
 	Range{min: i64, max: i64, have: i64},
 	HexChar{pos: usize, value: char},
 	HexEof,
 	File(io::Error),
 	Write(SegmentError),
+	Put(PutError),
 }
 
 impl fmt::Display for DataError
@@ -248,11 +396,13 @@ impl fmt::Display for DataError
 		match self
 		{
 			Self::Inactive => f.write_str("no active segment to write to"),
-			Self::Range{min, max, have} => write!(f, "constant out of range ({min} to {max}, got {have})"),
-			Self::HexChar{pos, value} => write!(f, "invalid hex char {value:?} at {pos}"),
+			&Self::NotFound{ref name, realm} => write!(f, "no such {realm} constant {name:?}"),
+			&Self::Range{min, max, have} => write!(f, "constant out of range ({min} to {max}, got {have})"),
+			&Self::HexChar{pos, value} => write!(f, "invalid hex char {value:?} at {pos}"),
 			Self::HexEof => f.write_str("unexpected eof in hex string"),
 			Self::File(..) => f.write_str("could not access referenced file"),
-			Self::Write(..) => f.write_str("could not write alignment bytes"),
+			Self::Write(..) => f.write_str("could not write segment"),
+			Self::Put(..) => f.write_str("could not write data bytes"),
 		}
 	}
 }
