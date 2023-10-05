@@ -71,8 +71,8 @@ impl RegisterSet
 	{
 		if self.0 > 0
 		{
-			let first = self.0.trailing_zeros() as u8;
-			RegIter{next: Some(first), more: self.0 >> first}
+			let first = self.0.trailing_zeros();
+			RegIter{next: Some(first as u8), more: self.0.checked_shr(first + 1).unwrap_or(0)}
 		}
 		else {RegIter{next: None, more: 0}}
 	}
@@ -132,8 +132,8 @@ impl Iterator for RegIter
 			{
 				self.next = if self.more > 0
 				{
-					let dist = self.more.trailing_zeros();
-					self.more >>= dist;
+					let dist = self.more.trailing_zeros() + 1;
+					self.more = self.more.checked_shr(dist).unwrap_or(0);
 					Some(curr + dist as u8)
 				}
 				else {None};
