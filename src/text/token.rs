@@ -1,5 +1,6 @@
 use core::fmt;
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::error::Error;
 
 use crate::text::Positioned;
@@ -71,7 +72,7 @@ impl<'l> fmt::Display for TokenValue<'l>
 }
 
 #[derive(Clone, Debug)]
-pub struct Tokenizer<'l>(Matcher<'l>);
+pub struct Tokenizer<'l>(Matcher<'l>, VecDeque<Token<'l>>, Option<TokenError>);
 
 fn consume_line_comment<'l>(m: &mut Matcher<'l>) -> Result<(), TokenError>
 {
@@ -115,7 +116,7 @@ impl<'l> Tokenizer<'l>
 {
 	pub fn new(data: &'l [u8]) -> Self
 	{
-		Self(Matcher::new(data))
+		Self(Matcher::new(data), VecDeque::new(), None)
 	}
 	
 	pub fn get_line(&self) -> u32
@@ -133,7 +134,7 @@ impl<'l> Tokenizer<'l>
 		self.0.clear();
 	}
 	
-	pub fn next_token(&mut self) -> Option<Result<Token<'l>, TokenError>>
+	fn next_token(&mut self) -> Option<Result<Token<'l>, TokenError>>
 	{
 		let mut start = self.0.clone();
 		while let Some(curr) = self.0.next()
@@ -459,6 +460,55 @@ impl<'l> Tokenizer<'l>
 		}
 		None
 	}
+	
+	pub fn peek<'s>(&'s mut self) -> Option<Result<&'s Token<'l>, &'s TokenError>>
+	{
+		if !self.1.is_empty()
+		{
+			return Some(Ok(self.1.front().unwrap()));
+		}
+		if let Some(ref e) = self.2 {Some(Err(e))}
+		else
+		{
+			match self.next_token()
+			{
+				None => None,
+				Some(Ok(t)) =>
+				{
+					self.1.push_back(t);
+					self.1.back().map(Result::Ok)
+				},
+				Some(Err(e)) =>
+				{
+					self.2 = Some(e);
+					self.2.as_ref().map(Result::Err)
+				},
+			}
+		}
+	}
+	
+	pub fn peek_nth(&mut self, idx: usize) -> Option<Result<&Token<'l>, &TokenError>>
+	{
+		while self.1.len() < idx
+		{
+			if self.2.is_some() {return None;}
+			match self.next_token()
+			{
+				None => return None,
+				Some(Ok(t)) => self.1.push_back(t),
+				Some(Err(e)) => self.2 = Some(e),
+			}
+		}
+		if idx == self.1.len()
+		{
+			if let Some(ref e) = self.2 {Some(Err(e))}
+			else {None}
+		}
+		else
+		{
+			self.1.get(idx).map(Result::Ok)
+		}
+	}
 }
 
 impl<'l> Iterator for Tokenizer<'l>
@@ -467,7 +517,15 @@ impl<'l> Iterator for Tokenizer<'l>
 	
 	fn next(&mut self) -> Option<Self::Item>
 	{
-		self.next_token()
+		match self.1.pop_front()
+		{
+			None =>
+			{
+				if let Some(e) = self.2.take() {Some(Err(e))}
+				else {self.next_token()}
+			},
+			Some(t) => Some(Ok(t)),
+		}
 	}
 }
 

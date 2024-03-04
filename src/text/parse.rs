@@ -127,7 +127,7 @@ impl<'l> Parser<'l>
 	
 	pub fn next_element(&mut self) -> Option<Result<Element<'l>, ParseError>>
 	{
-		match self.0.next_token()
+		match self.0.next()
 		{
 			Some(t) =>
 			{
@@ -151,7 +151,7 @@ impl<'l> Parser<'l>
 		{
 			Ok(Token{value: TokenValue::DirectiveMark, line, col}) =>
 			{
-				let name = match self.0.next_token()
+				let name = match self.0.next()
 				{
 					Some(Ok(Token{value: TokenValue::Identifier(ident), ..})) => ident,
 					Some(Ok(t)) => return Err(Self::expect("identifier", t)),
@@ -166,7 +166,7 @@ impl<'l> Parser<'l>
 			},
 			Ok(Token{value: TokenValue::Identifier(name), line, col}) =>
 			{
-				let curr = match self.0.next_token()
+				let curr = match self.0.next()
 				{
 					Some(Ok(Token{value: TokenValue::LabelMark, ..})) => return Ok(Element{value: ElementValue::Label(name), line, col}),
 					Some(Ok(t)) => t,
@@ -186,7 +186,7 @@ impl<'l> Parser<'l>
 	
 	fn next_inner(&mut self, expect: &'static str) -> Result<Token<'l>, ParseError>
 	{
-		match self.0.next_token()
+		match self.0.next()
 		{
 			Some(Ok(t)) => Ok(t),
 			Some(Err(e)) => Err(e.into()),
