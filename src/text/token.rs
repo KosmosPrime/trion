@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 use std::error::Error;
 
 use crate::text::Positioned;
-use crate::text::matcher::Matcher;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Number
@@ -72,402 +71,423 @@ impl<'l> fmt::Display for TokenValue<'l>
 }
 
 #[derive(Clone, Debug)]
-pub struct Tokenizer<'l>(Matcher<'l>, VecDeque<Token<'l>>, Option<TokenError>);
-
-fn consume_line_comment<'l>(m: &mut Matcher<'l>) -> Result<(), TokenError>
+pub struct Tokenizer<'l>
 {
-	match m.search('\n')
-	{
-		Ok(..) => Ok(()),
-		Err(e) => Err(e),
-	}
-}
-
-fn consume_block_comment<'l>(m: &mut Matcher<'l>, line: u32, col: u32) -> Result<(), TokenError>
-{
-	let mut depth = 1usize;
-	let mut prev: Option<char> = None;
-	while let Some(curr) = m.next()
-	{
-		match curr
-		{
-			Ok(c) =>
-			{
-				if prev == Some('/') && c == '*'
-				{
-					depth += 1;
-					prev = None; // avoid matching the '*' again as "*/"
-				}
-				else if prev == Some('*') && c == '/'
-				{
-					depth -= 1;
-					if depth == 0 {return Ok(());}
-					prev = None; // avoid matching the '/' again as '/*'
-				}
-				else {prev = Some(c);}
-			},
-			Err(e) => return Err(e),
-		}
-	}
-	Err(Positioned{line, col, value: TokenErrorKind::BlockComment})
+	data: &'l str,
+	utf_err: bool,
+	col: u32,
+	line: u32,
+	tokens: VecDeque<Token<'l>>,
+	token_err: Option<TokenError>,
 }
 
 impl<'l> Tokenizer<'l>
 {
 	pub fn new(data: &'l [u8]) -> Self
 	{
-		Self(Matcher::new(data), VecDeque::new(), None)
+		let (data, utf_err) = match core::str::from_utf8(data)
+		{
+			Ok(s) => (s, false),
+			Err(e) =>
+			{
+				// SAFETY: the error guarantees this slice is valid
+				(unsafe{core::str::from_utf8_unchecked(&data[..e.valid_up_to()])}, true)
+			},
+		};
+		Self
+		{
+			data, utf_err,
+			line: 1,
+			col: 1,
+			tokens: VecDeque::new(),
+			token_err: None,
+		}
 	}
 	
 	pub fn get_line(&self) -> u32
 	{
-		self.0.line()
+		self.line
 	}
 	
 	pub fn get_column(&self) -> u32
 	{
-		self.0.column()
+		self.col
 	}
 	
 	pub fn clear(&mut self)
 	{
-		self.0.clear();
+		self.data = "";
+		self.utf_err = false;
+	}
+	
+	fn update_pos(&mut self, data: &str)
+	{
+		let lines = u32::try_from(data.bytes().filter(|&b| b == b'\n').count()).unwrap_or(u32::MAX);
+		if lines > 0
+		{
+			self.line = self.line.saturating_add(lines);
+			self.col = 1;
+		}
+		let data = &data[data.bytes().rposition(|b| b == b'\n').map_or(0, |v| v + 1)..];
+		// faster character count by ignoring continuation bytes (instead of `str::chars`)
+		let coluns = u32::try_from(data.bytes().filter(|&b| (b & 0b11_000000) != 0b10_000000).count()).unwrap_or(u32::MAX);
+		self.col = self.col.saturating_add(coluns);
+	}
+	
+	fn positioned<T>(&self, value: T) -> Positioned<T>
+	{
+		Positioned{line: self.line, col: self.col, value}
 	}
 	
 	fn next_token(&mut self) -> Option<Result<Token<'l>, TokenError>>
 	{
-		let mut start = self.0.clone();
-		while let Some(curr) = self.0.next()
+		while self.data.len() > 0
 		{
-			let c = match curr
+			let space_bytes = match self.data.bytes().position(|b| b != b'\t' && b != b'\n' && b != b'\r' && b != b' ')
 			{
-				Ok(c) => c,
-				Err(e) => return Some(Err(e)),
+				None => self.data.len(),
+				Some(cnt) => cnt,
 			};
-			
-			match c
+			if space_bytes > 0
 			{
-				'\t' | '\n' | '\r' | ' ' => (),
-				'/' =>
+				self.update_pos(&self.data[..space_bytes]);
+				self.data = &self.data[space_bytes..];
+			}
+			
+			if self.data.starts_with("//")
+			{
+				match self.data.bytes().position(|b| b == b'\n')
 				{
-					let mut t = self.0.clone();
-					match t.next()
+					None =>
 					{
-						None => return Some(Ok(start.positioned(TokenValue::Divide))),
-						Some(Ok(c)) if c == '/' =>
+						self.update_pos(self.data);
+						let utf_err = self.utf_err;
+						self.clear();
+						if utf_err
 						{
-							match consume_line_comment(&mut t)
+							return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
+						}
+					},
+					Some(line_len) =>
+					{
+						self.data = &self.data[line_len + 1..];
+						self.line = self.line.saturating_add(1);
+						self.col = 1;
+					},
+				}
+			}
+			else if self.data.starts_with("/*")
+			{
+				let mut depth = 1; // support nested block comments
+				let mut start = 2; // to avoid combinations like "/*/" and "*/*"
+				let comment_bytes = self.data[..self.data.len() - 1].bytes().enumerate().skip(2).position(|(p, b)|
+				{
+					if b == b'/' && p >= start && self.data.as_bytes()[p + 1] == b'*'
+					{
+						// no overflow because `p < self.data.len() - 1 <= usize::MAX - 1`
+						start = p + 2;
+						// no overflow because this can't happen more than `usize::MAX / 2` times
+						depth += 1;
+					}
+					else if b == b'*' && p >= start && self.data.as_bytes()[p + 1] == b'/'
+					{
+						// no overflow because `p < self.data.len() - 1 <= usize::MAX - 1`
+						start = p + 2;
+						// no overflow because this can't happen more than `usize::MAX / 2` times
+						depth -= 1;
+					}
+					depth == 0
+				});
+				if let Some(comment_bytes) = comment_bytes
+				{
+					self.update_pos(&self.data[..4 + comment_bytes]);
+					self.data = &self.data[4 + comment_bytes..];
+				}
+				else
+				{
+					self.update_pos(self.data);
+					let err = if self.utf_err {TokenErrorKind::BadUnicode} else {TokenErrorKind::BlockComment};
+					self.clear();
+					return Some(Err(self.positioned(err)))
+				}
+			}
+			else {break;}
+		}
+		
+		if !self.data.is_empty()
+		{
+			match self.do_next()
+			{
+				Some(Err(e)) =>
+				{
+					self.clear();
+					Some(Err(e))
+				},
+				r => r,
+			}
+		}
+		else
+		{
+			if self.utf_err
+			{
+				self.utf_err = false;
+				Some(Err(self.positioned(TokenErrorKind::BadUnicode)))
+			}
+			else {None}
+		}
+	}
+	
+	fn do_next(&mut self) -> Option<Result<Token<'l>, TokenError>>
+	{
+		let (n, ascii_ln, token) = match self.data.as_bytes()[0]
+		{
+			b',' => (1, true, TokenValue::Separator),
+			b';' => (1, true, TokenValue::Terminator),
+			b':' => (1, true, TokenValue::LabelMark),
+			b'.' => (1, true, TokenValue::DirectiveMark),
+			b'+' => (1, true, TokenValue::Add),
+			b'-' => (1, true, TokenValue::Subtract),
+			b'*' => (1, true, TokenValue::Multiply),
+			b'/' => (1, true, TokenValue::Divide),
+			b'!' => (1, true, TokenValue::Not),
+			b'&' => (1, true, TokenValue::And),
+			b'|' => (1, true, TokenValue::Or),
+			b'^' => (1, true, TokenValue::ExclusiveOr),
+			b'<' if self.data.len() >= 2 && self.data.as_bytes()[1] == b'<' => (2, true, TokenValue::LeftShift),
+			b'>' if self.data.len() >= 2 && self.data.as_bytes()[1] == b'>' => (2, true, TokenValue::RightShift),
+			b'0'..=b'9' =>
+			{
+				let (off, radix) =
+				{
+					if self.data.starts_with("0b") {(2, 2)}
+					else if self.data.starts_with("0x") {(2, 16)}
+					else if self.data.starts_with("0") && self.data.len() > 1 && matches!(self.data.as_bytes()[1], b'0'..=b'7') {(1, 8)}
+					else {(0, 10)}
+				};
+				let len = match self.data[off..].bytes().position(|b| !(b as char).is_digit(radix))
+				{
+					None if self.utf_err =>
+					{
+						// numbers are ASCII so `str::bytes().count() == str::chars().count()`
+						self.col = self.col.saturating_add(u32::try_from(self.data.len()).unwrap_or(u32::MAX));
+						self.clear();
+						return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
+					},
+					None => self.data.len() - off,
+					Some(n) => n,
+				};
+				let text = &self.data[off..off + len];
+				match i64::from_str_radix(text, radix)
+				{
+					Ok(v) => (off + len, true, TokenValue::Number(Number::Integer(v))),
+					Err(..) =>
+					{
+						self.clear();
+						return Some(Err(self.positioned(TokenErrorKind::BadNumber)));
+					},
+				}
+			},
+			b'\'' =>
+			{
+				let mut chars = self.data[1..].chars();
+				let result = match chars.next()
+				{
+					None => Err(self.utf_err),
+					Some('\\') =>
+					{
+						match chars.next()
+						{
+							None => Err(self.utf_err),
+							Some('t') => Ok((2, '\t')),
+							Some('n') => Ok((2, '\n')),
+							Some('r') => Ok((2, '\r')),
+							Some(c @ ('"' | '\'' | '\\')) => Ok((2, c)),
+							Some(..) => Err(false),
+						}
+					},
+					Some(c @ ('\t' | ' '..='~' | '\u{80}'..)) => Ok((c.len_utf8(), c)),
+					_ => Err(false),
+				}.and_then(|v|
+				{
+					match chars.next()
+					{
+						None => Err(self.utf_err),
+						Some('\'') => Ok(v),
+						Some(..) => Err(false),
+					}
+				});
+				match result
+				{
+					Ok((n, c)) => (1 + n + 1, c < '\u{80}', TokenValue::Number(Number::Integer(u32::from(c).into()))),
+					Err(utf_err) =>
+					{
+						let err = if utf_err
+						{
+							self.update_pos(self.data);
+							TokenErrorKind::BadUnicode
+						}
+						else {TokenErrorKind::BadCharacter};
+						self.clear();
+						return Some(Err(self.positioned(err)));
+					},
+				}
+			},
+			b'A'..=b'Z' | b'_' | b'a'..=b'z' =>
+			{
+				let len = match self.data.bytes().position(|b| !matches!(b, b'$' | b'.' | b'0'..=b'9' | b'@' | b'A'..=b'Z' | b'_' | b'a'..=b'z'))
+				{
+					None if self.utf_err =>
+					{
+						// identifiers are ASCII so `str::bytes().count() == str::chars().count()`
+						self.col = self.col.saturating_add(u32::try_from(self.data.len()).unwrap_or(u32::MAX));
+						self.clear();
+						return Some(Err(self.positioned(TokenErrorKind::BadUnicode)));
+					},
+					None => self.data.len(),
+					Some(n) => n,
+				};
+				(len, true, TokenValue::Identifier(&self.data[..len]))
+			},
+			b'"' =>
+			{
+				let mut pos = 1usize;
+				let mut escaped = String::new();
+				loop
+				{
+					match self.data[pos..].bytes().position(|b| b == b'"' || b == b'\\' || (b < b' ' && b != b'\t') || b == 0x7F)
+					{
+						None =>
+						{
+							let err = if self.utf_err
 							{
-								Ok(..) => self.0 = t,
-								Err(e) =>
-								{
-									self.0 = t;
-									return Some(Err(e));
-								},
+								self.update_pos(self.data);
+								TokenErrorKind::BadUnicode
 							}
+							else {TokenErrorKind::BadString};
+							self.clear();
+							return Some(Err(self.positioned(err)));
 						},
-						Some(Ok(c)) if c == '*' =>
+						Some(off) =>
 						{
-							match consume_block_comment(&mut t, start.line(), start.column())
+							let c = self.data.as_bytes()[pos + off];
+							// simple condition, none of the false positives are matched by above `str::bytes().position()` call
+							if c < b' ' && c >= 0x7F
 							{
-								Ok(..) => self.0 = t,
-								Err(e) =>
-								{
-									self.0 = t;
-									return Some(Err(e));
-								},
+								self.clear();
+								return Some(Err(self.positioned(TokenErrorKind::BadString)));
 							}
-						},
-						Some(Ok(..)) => return Some(Ok(start.positioned(TokenValue::Divide))),
-						Some(Err(e)) =>
-						{
-							self.0 = t;
-							return Some(Err(e));
-						},
-					}
-				},
-				',' => return Some(Ok(start.positioned(TokenValue::Separator))),
-				';' => return Some(Ok(start.positioned(TokenValue::Terminator))),
-				':' => return Some(Ok(start.positioned(TokenValue::LabelMark))),
-				'.' => return Some(Ok(start.positioned(TokenValue::DirectiveMark))),
-				'+' => return Some(Ok(start.positioned(TokenValue::Add))),
-				'-' => return Some(Ok(start.positioned(TokenValue::Subtract))),
-				'*' => return Some(Ok(start.positioned(TokenValue::Multiply))),
-				'!' => return Some(Ok(start.positioned(TokenValue::Not))),
-				'&' => return Some(Ok(start.positioned(TokenValue::And))),
-				'|' => return Some(Ok(start.positioned(TokenValue::Or))),
-				'^' => return Some(Ok(start.positioned(TokenValue::ExclusiveOr))),
-				'<' | '>' =>
-				{
-					let mut t = self.0.clone();
-					match t.next()
-					{
-						Some(Ok(c)) =>
-						{
-							self.0 = t;
-							return Some(Ok(start.positioned(if c == '<' {TokenValue::LeftShift} else {TokenValue::RightShift})));
-						},
-						Some(Err(e)) =>
-						{
-							self.0 = t;
-							return Some(Err(e));
-						},
-						_ =>
-						{
-							self.0.clear();
-							return Some(Err(start.positioned(TokenErrorKind::Unexpected(c))));
-						}
-					}
-				},
-				'0'..='9' =>
-				{
-					let (radix, num_start) = if c == '0'
-					{
-						let mut t = self.0.clone();
-						match t.next()
-						{
-							None => (10, start.clone()),
-							Some(Ok(c)) =>
+							if c == b'\\'
 							{
-								if c == 'x' {(16, t)}
-								else if c == 'b' {(2, t)}
-								else if c.is_digit(8) {(8, self.0.clone())}
-								else {(10, start.clone())}
-							},
-							Some(Err(e)) =>
-							{
-								self.0 = t;
-								return Some(Err(e));
-							},
-						}
-					}
-					else {(10, start.clone())};
-					let mut num_end = num_start.clone();
-					self.0 = num_start.clone();
-					while let Some(curr) = self.0.next()
-					{
-						match curr
-						{
-							Ok(c) if c.is_digit(radix) => num_end = self.0.clone(),
-							Ok(..) => break,
-							Err(e) => return Some(Err(e)),
-						}
-					}
-					let text = num_end.since(&num_start);
-					return Some(match i64::from_str_radix(text, radix)
-					{
-						Ok(v) =>
-						{
-							self.0 = num_end;
-							Ok(start.positioned(TokenValue::Number(Number::Integer(v))))
-						},
-						Err(..) =>
-						{
-							self.0.clear();
-							Err(start.positioned(TokenErrorKind::BadNumber))
-						},
-					});
-				},
-				'\'' =>
-				{
-					let mut end = self.0.clone();
-					let c = match end.next()
-					{
-						None | Some(Ok('\'')) =>
-						{
-							self.0.clear();
-							return Some(Err(start.positioned(TokenErrorKind::BadCharacter)));
-						},
-						Some(Ok('\\')) =>
-						{
-							match end.next()
-							{
-								Some(Ok('t')) => '\t',
-								Some(Ok('n')) => '\n',
-								Some(Ok('r')) => '\r',
-								Some(Ok(c @ ('"' | '\'' | '\\'))) => c,
-								None | Some(Ok(..)) =>
+								if off > 0
 								{
-									self.0.clear();
-									return Some(Err(start.positioned(TokenErrorKind::BadCharacter)));
-								},
-								Some(Err(e)) =>
+									escaped.push_str(&self.data[pos..pos + off]);
+									pos += off;
+								}
+								// at least 3 characters are needed: backslash, escape character and closing quotation mark
+								if self.data.len() - pos < 3
 								{
-									self.0 = end;
-									return Some(Err(e));
-								},
-							}
-						},
-						Some(Ok(c)) => c,
-						Some(Err(e)) =>
-						{
-							self.0 = end;
-							return Some(Err(e));
-						},
-					};
-					match end.next()
-					{
-						Some(Ok('\'')) =>
-						{
-							self.0 = end;
-							return Some(Ok(start.positioned(TokenValue::Number(Number::Integer(u32::from(c).into())))));
-						},
-						None | Some(Ok(..)) =>
-						{
-							self.0.clear();
-							return Some(Err(start.positioned(TokenErrorKind::BadCharacter)));
-						},
-						Some(Err(e)) =>
-						{
-							self.0 = end;
-							return Some(Err(e));
-						},
-					}
-				},
-				'A'..='Z' | '_' | 'a'..='z' =>
-				{
-					let mut end = self.0.clone();
-					let mut prev = end.clone();
-					while let Some(curr) = end.next()
-					{
-						match curr
-						{
-							Ok('$' | '.' | '0'..='9' | '@' | 'A'..='Z' | '_' | 'a'..='z') => prev = end.clone(),
-							Ok(..) => break,
-							Err(e) =>
-							{
-								self.0 = end;
-								return Some(Err(e));
-							},
-						}
-					}
-					let val = prev.since(&mut start);
-					self.0 = prev;
-					return Some(Ok(start.positioned(TokenValue::Identifier(val))));
-				},
-				'"' =>
-				{
-					let mut owned: Option<String> = None;
-					let mut prev = self.0.clone();
-					while let Some(curr) = self.0.next()
-					{
-						let c = match curr
-						{
-							Ok(c) => c,
-							Err(e) => return Some(Err(e)),
-						};
-						if c == '"'
-						{
-							match owned
-							{
-								None =>
+									self.clear();
+									return Some(Err(self.positioned(TokenErrorKind::BadString)));
+								}
+								match self.data.as_bytes()[pos + 1]
 								{
-									let all = self.0.since(&prev); // contains the trailing '"'
-									return Some(Ok(start.positioned(TokenValue::String(Cow::Borrowed(&all[..all.len() - 1])))));
-								},
-								Some(mut data) =>
-								{
-									let rest = self.0.since(&prev); // contains the trailing '"'
-									data.push_str(&rest[..rest.len() - 1]);
-									return Some(Ok(start.positioned(TokenValue::String(Cow::Owned(data)))));
-								},
-							}
-						}
-						else if c == '\\'
-						{
-							let str_ref = owned.get_or_insert_with(String::new);
-							let prev_str = self.0.since(&prev); // contains the trailing '\\'
-							if prev_str.len() > 1 {str_ref.push_str(&prev_str[..prev_str.len() - 1]);}
-							match self.0.next()
-							{
-								Some(Ok('0')) => str_ref.push('\0'),
-								Some(Ok('t')) => str_ref.push('\t'),
-								Some(Ok('n')) => str_ref.push('\n'),
-								Some(Ok('r')) => str_ref.push('\r'),
-								Some(Ok(c @ ('"' | '\'' | '\\'))) => str_ref.push(c),
-								Some(Ok('u')) =>
-								{
-									match self.0.next()
+									b'0' => escaped.push('\0'),
+									b't' => escaped.push('\t'),
+									b'n' => escaped.push('\n'),
+									b'r' => escaped.push('\r'),
+									c @ (b'"' | b'\'' | b'\\') => escaped.push(c as char),
+									// safe index, we checked for an extra character (see above comment)
+									b'u' if self.data.as_bytes()[pos + 2] == b'{' =>
 									{
-										Some(Ok('{')) => (),
-										Some(Err(e)) => return Some(Err(e)),
-										None | Some(Ok(..)) =>
+										// longest escape sequence is "\u{10FFFF}"
+										match self.data[pos + 3..].bytes().take(7).position(|b| b == b'}')
 										{
-											self.0 = start;
-											return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
-										},
-									}
-									let uni_start = self.0.clone();
-									loop
-									{
-										match self.0.next()
-										{
-											Some(Ok('0'..='9' | 'A'..='F' | 'a'..='f')) => (),
-											Some(Ok('}')) => break,
-											Some(Err(e)) => return Some(Err(e)),
-											None | Some(Ok(..)) =>
+											None =>
 											{
-												self.0 = start;
-												return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
+												let err = if self.utf_err
+												{
+													self.update_pos(self.data);
+													TokenErrorKind::BadUnicode
+												}
+												else {TokenErrorKind::BadString};
+												self.clear();
+												return Some(Err(self.positioned(err)));
+											},
+											Some(end) =>
+											{
+												match u32::from_str_radix(&self.data[pos + 3..pos + 3 + end], 16).ok().and_then(char::from_u32)
+												{
+													Some(c) =>
+													{
+														escaped.push(c);
+														pos += end + 2; // 2 curly brackets + character value
+													},
+													None =>
+													{
+														self.clear();
+														return Some(Err(self.positioned(TokenErrorKind::BadString)));
+													},
+												}
 											},
 										}
-									}
-									let uni_esc = self.0.since(&uni_start); // contains the trailing '}'
-									match u32::from_str_radix(&uni_esc[..uni_esc.len() - 1], 16)
+									},
+									_ =>
 									{
-										Ok(v) =>
-										{
-											if let Some(c) = char::from_u32(v) {str_ref.push(c);}
-											else
-											{
-												self.0 = start;
-												return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
-											}
-										},
-										_ =>
-										{
-											self.0 = start;
-											return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
-										},
-									}
-								},
-								None | Some(Ok(..)) =>
-								{
-									self.0 = start;
-									return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
-								},
-								Some(Err(e)) => return Some(Err(e)),
+										self.clear();
+										return Some(Err(self.positioned(TokenErrorKind::BadString)));
+									},
+								}
+								pos += 2; // backslash + escape character
 							}
-							prev = self.0.clone();
-						}
+							else
+							{
+								assert_eq!(c, b'"');
+								if !escaped.is_empty() && off > 0
+								{
+									escaped.push_str(&self.data[pos..pos + off]);
+								}
+								pos += off + 1; // no overflow because this is at most `self.data.len()`
+								break;
+							}
+						},
 					}
-					self.0 = start;
-					return Some(Err(self.0.positioned(TokenErrorKind::BadString)));
-				},
-				'(' => return Some(Ok(start.positioned(TokenValue::BeginGroup))),
-				')' => return Some(Ok(start.positioned(TokenValue::EndGroup))),
-				'[' => return Some(Ok(start.positioned(TokenValue::BeginAddr))),
-				']' => return Some(Ok(start.positioned(TokenValue::EndAddr))),
-				'{' => return Some(Ok(start.positioned(TokenValue::BeginSeq))),
-				'}' => return Some(Ok(start.positioned(TokenValue::EndSeq))),
-				c =>
-				{
-					self.0.clear();
-					return Some(Err(start.positioned(TokenErrorKind::Unexpected(c))));
-				},
-			}
-			start = self.0.clone();
+				}
+				// it's simpler to just use `Self::update_pos()` instead of manually checking if the input (!) is an ASCII line
+				(pos, false, TokenValue::String(if !escaped.is_empty() {Cow::Owned(escaped)} else {Cow::Borrowed(&self.data[1..pos - 1])}))
+			},
+			b'(' => (1, true, TokenValue::BeginGroup),
+			b')' => (1, true, TokenValue::EndGroup),
+			b'[' => (1, true, TokenValue::BeginAddr),
+			b']' => (1, true, TokenValue::EndAddr),
+			b'{' => (1, true, TokenValue::BeginSeq),
+			b'}' => (1, true, TokenValue::EndSeq),
+			_ =>
+			{
+				let c = self.data.chars().next().unwrap();
+				self.clear();
+				return Some(Err(self.positioned(TokenErrorKind::Unexpected(c))));
+			},
+		};
+		let token = self.positioned(token);
+		if ascii_ln
+		{
+			self.col = self.col.saturating_add(u32::try_from(n).unwrap_or(u32::MAX));
 		}
-		None
+		else
+		{
+			self.update_pos(&self.data[..n]);
+		}
+		self.data = &self.data[n..];
+		Some(Ok(token))
 	}
 	
 	pub fn peek<'s>(&'s mut self) -> Option<Result<&'s Token<'l>, &'s TokenError>>
 	{
-		if !self.1.is_empty()
+		if !self.tokens.is_empty()
 		{
-			return Some(Ok(self.1.front().unwrap()));
+			return Some(Ok(self.tokens.front().unwrap()));
 		}
-		if let Some(ref e) = self.2 {Some(Err(e))}
+		if let Some(ref e) = self.token_err {Some(Err(e))}
 		else
 		{
 			match self.next_token()
@@ -475,13 +495,13 @@ impl<'l> Tokenizer<'l>
 				None => None,
 				Some(Ok(t)) =>
 				{
-					self.1.push_back(t);
-					self.1.back().map(Result::Ok)
+					self.tokens.push_back(t);
+					self.tokens.back().map(Result::Ok)
 				},
 				Some(Err(e)) =>
 				{
-					self.2 = Some(e);
-					self.2.as_ref().map(Result::Err)
+					self.token_err = Some(e);
+					self.token_err.as_ref().map(Result::Err)
 				},
 			}
 		}
@@ -489,24 +509,24 @@ impl<'l> Tokenizer<'l>
 	
 	pub fn peek_nth(&mut self, idx: usize) -> Option<Result<&Token<'l>, &TokenError>>
 	{
-		while self.1.len() < idx
+		while self.tokens.len() < idx
 		{
-			if self.2.is_some() {return None;}
+			if self.token_err.is_some() {return None;}
 			match self.next_token()
 			{
 				None => return None,
-				Some(Ok(t)) => self.1.push_back(t),
-				Some(Err(e)) => self.2 = Some(e),
+				Some(Ok(t)) => self.tokens.push_back(t),
+				Some(Err(e)) => self.token_err = Some(e),
 			}
 		}
-		if idx == self.1.len()
+		if idx == self.tokens.len()
 		{
-			if let Some(ref e) = self.2 {Some(Err(e))}
+			if let Some(ref e) = self.token_err {Some(Err(e))}
 			else {None}
 		}
 		else
 		{
-			self.1.get(idx).map(Result::Ok)
+			self.tokens.get(idx).map(Result::Ok)
 		}
 	}
 }
@@ -517,11 +537,11 @@ impl<'l> Iterator for Tokenizer<'l>
 	
 	fn next(&mut self) -> Option<Self::Item>
 	{
-		match self.1.pop_front()
+		match self.tokens.pop_front()
 		{
 			None =>
 			{
-				if let Some(e) = self.2.take() {Some(Err(e))}
+				if let Some(e) = self.token_err.take() {Some(Err(e))}
 				else {self.next_token()}
 			},
 			Some(t) => Some(Ok(t)),
@@ -586,7 +606,17 @@ mod test
 	{
 		let mut t = Tokenizer::new("  \t\t\n\t \n  \r\n  \t ".as_bytes());
 		assert!(t.next().is_none());
-		assert_eq!((t.0.line(), t.0.column()), (4, 5));
+		assert_eq!((t.get_line(), t.get_column()), (4, 5));
+	}
+	
+	#[test]
+	fn unicode()
+	{
+		let mut t = Tokenizer::new(b"\n\tevil: \x83");
+		expect!(t, Positioned{value: TokenValue::Identifier(s), ..}, {assert_eq!(s, "evil");});
+		expect!(t, Positioned{value: TokenValue::LabelMark, ..}, {});
+		assert_eq!(t.next().unwrap().unwrap_err().value, TokenErrorKind::BadUnicode);
+		assert_eq!((t.get_line(), t.get_column()), (2, 8));
 	}
 	
 	#[test]
@@ -599,7 +629,7 @@ mod test
 		comment
 		// comment */".as_bytes());
 		assert!(t.next().is_none());
-		assert_eq!((t.0.line(), t.0.column()), (6, 16));
+		assert_eq!((t.get_line(), t.get_column()), (6, 16));
 	}
 	
 	#[test]
@@ -629,9 +659,10 @@ mod test
 	#[test]
 	fn chars()
 	{
-		let mut t = Tokenizer::new("' '   'a' '\t' '\n' '\r'".as_bytes());
+		let mut t = Tokenizer::new("' '   'a' '\t' '\\t' '\\n' '\\r'".as_bytes());
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, ' ' as i64);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 'a' as i64);});
+		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, '\t' as i64);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, '\t' as i64);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, '\n' as i64);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, '\r' as i64);});
