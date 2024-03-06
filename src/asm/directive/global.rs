@@ -67,23 +67,24 @@ impl Directive for Global
 						{
 							let source = Box::new(GlobalError::NotFound{name, realm: Realm::Local});
 							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{name: this.get_name().to_owned(), source}});
-							return;
+							return Err(ErrorLevel::Trivial);
 						},
 						Lookup::Deferred =>
 						{
 							let source = Box::new(GlobalError::Deferred{name, realm: Realm::Local});
 							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{name: this.get_name().to_owned(), source}});
-							return;
+							return Err(ErrorLevel::Trivial);
 						},
 						Lookup::Found(v) => v,
 					};
 					match ctx.insert_constant(name.as_str(), value, Realm::Global)
 					{
-						Ok(..) => (),
+						Ok(..) => Ok(()),
 						Err(ConstantError::Duplicate{name, realm}) =>
 						{
 							let source = Box::new(GlobalError::Duplicate{name, realm});
 							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{name: this.get_name().to_owned(), source}});
+							Err(ErrorLevel::Trivial)
 						},
 						Err(e) => unreachable!("{e:?}"),
 					}

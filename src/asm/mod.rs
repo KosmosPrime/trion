@@ -16,11 +16,21 @@ pub mod directive;
 pub mod instr;
 pub mod memory;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ErrorLevel
 {
 	Trivial, Fatal,
 }
+
+impl ErrorLevel
+{
+	pub fn should_abort(self) -> bool
+	{
+		self >= Self::Fatal
+	}
+}
+
+pub type TaskFn = dyn FnOnce(&mut Context) -> Result<(), ErrorLevel>;
 
 pub struct Context<'l>
 {
@@ -31,8 +41,8 @@ pub struct Context<'l>
 	active: Segment,
 	globals: HashMap<String, Option<i64>>,
 	locals: Option<HashMap<String, Option<i64>>>,
-	global_tasks: Vec<Box<dyn FnOnce(&mut Context)>>,
-	local_tasks: Option<Vec<Box<dyn FnOnce(&mut Context)>>>,
+	global_tasks: Vec<Box<TaskFn>>,
+	local_tasks: Option<Vec<Box<TaskFn>>>,
 	errors: Vec<Box<PosNamed<dyn Error>>>,
 }
 
@@ -314,7 +324,7 @@ impl<'l> Context<'l>
 		let constants = core::mem::replace(&mut self.locals, Some(HashMap::new())).map(|c| core::mem::replace(&mut self.globals, c));
 		let tasks = core::mem::replace(&mut self.local_tasks, Some(Vec::new())).map(|t| core::mem::replace(&mut self.global_tasks, t));
 		let mut frame = PathFrame{ctx: self, count: Some(count), constants, tasks};
-		let result = frame.ctx.do_assemble(data);
+		let mut result = frame.ctx.do_assemble(data);
 		if result != Err(ErrorLevel::Fatal)
 		{
 			let mut tasks = frame.ctx.local_tasks.replace(Vec::new()).unwrap();
@@ -322,9 +332,18 @@ impl<'l> Context<'l>
 			{
 				for task in tasks.drain(..)
 				{
-					task(&mut frame.ctx);
+					if let Err(lvl) = task(&mut frame.ctx)
+					{
+						result = match result
+						{
+							Ok(()) => Err(lvl),
+							Err(old_lvl) => Err(old_lvl.max(lvl)),
+						};
+						if lvl.should_abort() {break;}
+					}
 				}
 				core::mem::swap(frame.ctx.local_tasks.as_mut().unwrap(), &mut tasks);
+				if result.is_err_and(ErrorLevel::should_abort) {break;}
 			}
 		}
 		(result, frame.into_inner())
@@ -335,7 +354,7 @@ impl<'l> Context<'l>
 		self.instructions.assemble(self, line, col, name, args)
 	}
 	
-	pub fn add_task(&mut self, task: Box<dyn FnOnce(&mut Context)>, realm: Realm)
+	pub fn add_task(&mut self, task: Box<TaskFn>, realm: Realm)
 	{
 		let tasks = match realm
 		{
@@ -354,14 +373,22 @@ impl<'l> Context<'l>
 	
 	pub fn finalize(&mut self) -> bool
 	{
-		if !self.has_errored()
+		let mut abort = false;
+		let mut tasks = core::mem::replace(&mut self.global_tasks, Vec::new());
+		while !tasks.is_empty()
 		{
-			for task in core::mem::replace(&mut self.global_tasks, Vec::new())
+			for task in tasks.drain(..)
 			{
-				task(self);
+				if task(self).is_err_and(ErrorLevel::should_abort)
+				{
+					abort = true;
+					break;
+				}
 			}
+			core::mem::swap(&mut self.global_tasks, &mut tasks);
+			if abort {break;}
 		}
-		!self.has_errored()
+		!(abort || self.has_errored())
 	}
 	
 	pub fn has_errored(&self) -> bool
@@ -391,7 +418,7 @@ struct PathFrame<'l, 'c: 'l>
 	ctx: &'l mut Context<'c>,
 	count: Option<NonZeroUsize>,
 	constants: Option<HashMap<String, Option<i64>>>,
-	tasks: Option<Vec<Box<dyn FnOnce(&mut Context)>>>,
+	tasks: Option<Vec<Box<TaskFn>>>,
 }
 
 impl<'l, 'c: 'l> PathFrame<'l, 'c>

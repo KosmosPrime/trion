@@ -674,7 +674,7 @@ fn relocate_instr(addr: u32, tgt: u32, instr: &mut Instruction) -> Result<(), Co
 	Ok(())
 }
 
-fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction, label: String)
+fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction, label: String) -> Result<(), ErrorLevel>
 {
 	let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
 	let tgt = match ctx.get_constant(label.as_str(), realm)
@@ -683,7 +683,7 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 		{
 			// needing a constant which doesn't exist
 			ctx.push_error_in(addr.convert(ConstantError::NotFound{name: label, realm}));
-			return;
+			return Err(ErrorLevel::Trivial);
 		},
 		Lookup::Deferred =>
 		{
@@ -691,13 +691,14 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 			{
 				// we've reached the end of the stack, this constant won't be defined
 				ctx.push_error_in(addr.convert(ConstantError::NotFound{name: label, realm}));
+				return Err(ErrorLevel::Trivial);
 			}
 			else
 			{
 				// the constant could be set by a different module later
 				ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, addr, instr, label)), Realm::Global);
+				return Ok(());
 			}
-			return;
 		},
 		Lookup::Found(have) =>
 		{
@@ -707,7 +708,7 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 				Err(..) =>
 				{
 					ctx.push_error_in(addr.convert(ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}));
-					return;
+					return Err(ErrorLevel::Trivial);
 				},
 			}
 		},
@@ -719,7 +720,7 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 		Err(e) =>
 		{
 			ctx.push_error_in(addr.convert(e));
-			return;
+			return Err(ErrorLevel::Trivial);
 		},
 	}
 	
@@ -736,6 +737,7 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 					if let Err(e) = seg.write_at(addr.value, &tmp[..len])
 					{
 						ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
+						return Err(ErrorLevel::Trivial);
 					}
 				},
 				_ =>
@@ -744,6 +746,7 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 					if let Err(e) = ctx.output_mut().put(addr.value, &tmp[..len])
 					{
 						ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
+						return Err(ErrorLevel::Trivial);
 					}
 				},
 			}
@@ -751,8 +754,10 @@ fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction
 		Err(e) =>
 		{
 			ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
+			return Err(ErrorLevel::Trivial);
 		},
 	}
+	Ok(())
 }
 
 fn regl<'l>(name: &'l str, instr: &'l str, idx: usize) -> Result<Register, InstrErrorKind>

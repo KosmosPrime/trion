@@ -30,7 +30,7 @@ macro_rules!generate_expr
 			{
 				fn write($value: $type) -> [u8; $size] {$($write)+}
 				
-				fn deferred_write(ctx: &mut Context, addr: PosNamed<u32>, name: String)
+				fn deferred_write(ctx: &mut Context, addr: PosNamed<u32>, name: String) -> Result<(), ErrorLevel>
 				{
 					let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
 					match ctx.get_constant(name.as_str(), realm)
@@ -47,11 +47,13 @@ macro_rules!generate_expr
 								// we've reached the end of the stack, this constant won't be defined
 								let source = Box::new(DataError::NotFound{name, realm});
 								ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+								return Err(ErrorLevel::Trivial);
 							}
 							else
 							{
 								// the constant could be set by a different module later
 								ctx.add_task(Box::new(move |ctx| deferred_write(ctx, addr, name)), Realm::Global);
+								return Ok(());
 							}
 						},
 						Lookup::Found(val) =>
@@ -70,6 +72,7 @@ macro_rules!generate_expr
 											{
 												let source = Box::new(DataError::Write(e));
 												ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+												return Err(ErrorLevel::Trivial);
 											}
 										},
 										_ =>
@@ -79,6 +82,7 @@ macro_rules!generate_expr
 											{
 												let source = Box::new(DataError::Put(e));
 												ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+												return Err(ErrorLevel::Trivial);
 											}
 										},
 									}
@@ -87,10 +91,12 @@ macro_rules!generate_expr
 								{
 									let source = Box::new(DataError::Range{min: i64::from(<$type>::MIN), max: i64::from(<$type>::MAX), have: val});
 									ctx.push_error_in(addr.convert(DirectiveErrorKind::Apply{name: $name.get_name().to_owned(), source}));
+									return Err(ErrorLevel::Trivial);
 								},
 							}
 						},
 					}
+					Ok(())
 				}
 				
 				if ctx.active().is_none()
