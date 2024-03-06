@@ -260,8 +260,8 @@ impl<'l> Tokenizer<'l>
 				let (off, radix) =
 				{
 					if self.data.starts_with("0b") {(2, 2)}
+					else if self.data.starts_with("0o") {(2, 8)}
 					else if self.data.starts_with("0x") {(2, 16)}
-					else if self.data.starts_with("0") && self.data.len() > 1 && matches!(self.data.as_bytes()[1], b'0'..=b'7') {(1, 8)}
 					else {(0, 10)}
 				};
 				let len = match self.data[off..].bytes().position(|b| !(b as char).is_digit(radix))
@@ -635,7 +635,7 @@ mod test
 	#[test]
 	fn numbers()
 	{
-		let mut t = Tokenizer::new("0 0000 1 9 10 11 19 100 0100 0x100 0b100 0".as_bytes());
+		let mut t = Tokenizer::new("0 0000 1 9 10 11 19 100 0o100 0x100 0b100 0".as_bytes());
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 0);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 0);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 1);});
@@ -644,7 +644,7 @@ mod test
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 11);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 19);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 100);});
-		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 64);});
+		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 0o100);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 0x100);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 0b100);});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 0);});
