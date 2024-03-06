@@ -7,14 +7,14 @@ use std::path::{Path, PathBuf};
 use crate::asm::constant::{Lookup, Realm};
 use crate::asm::directive::DirectiveList;
 use crate::asm::instr::InstructionSet;
-use crate::asm::mem::map::{MemoryMap, PutError, Search};
+use crate::asm::memory::map::{MemoryMap, PutError, Search};
 use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ElementValue, Parser, ParseErrorKind};
 
 pub mod constant;
 pub mod directive;
 pub mod instr;
-pub mod mem;
+pub mod memory;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorLevel

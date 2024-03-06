@@ -3,7 +3,7 @@ use std::error::Error;
 use std::iter::FusedIterator;
 use std::slice::Iter as SliceIter;
 
-use crate::asm::mem::MemoryRange;
+use crate::asm::memory::MemoryRange;
 
 #[derive(Clone, Debug)]
 struct MemorySegment

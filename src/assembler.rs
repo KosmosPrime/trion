@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use crate::arm6m::Arm6M;
 use crate::asm::directive::DirectiveList;
 use crate::asm::Context;
-use crate::asm::mem::MemoryRange;
-use crate::asm::mem::map::Search;
+use crate::asm::memory::MemoryRange;
+use crate::asm::memory::map::Search;
 use crate::uf2::write::Uf2Write;
 use crate::uf2::crc::Crc;
 

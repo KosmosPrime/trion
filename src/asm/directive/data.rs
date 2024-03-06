@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use crate::asm::{Context, ErrorLevel, SegmentError};
 use crate::asm::constant::{Lookup, Realm};
 use crate::asm::directive::{Directive, DirectiveErrorKind};
-use crate::asm::mem::map::PutError;
+use crate::asm::memory::map::PutError;
 use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
