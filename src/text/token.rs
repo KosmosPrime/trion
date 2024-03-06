@@ -18,8 +18,8 @@ pub enum TokenValue<'l>
 {
 	Separator, Terminator,
 	LabelMark, DirectiveMark,
-	Add, Subtract, Multiply, Divide,
-	Not, And, Or, ExclusiveOr, LeftShift, RightShift,
+	Plus, Minus, Multiply, Divide, Modulo,
+	Not, BitAnd, BitOr, BitXor, LeftShift, RightShift,
 	Number(Number),
 	Identifier(&'l str),
 	String(Cow<'l, str>),
@@ -39,14 +39,15 @@ impl<'l> TokenValue<'l>
 			TokenValue::Terminator => "';'",
 			TokenValue::LabelMark => "':'",
 			TokenValue::DirectiveMark => "'.'",
-			TokenValue::Add => "'+'",
-			TokenValue::Subtract => "'-'",
+			TokenValue::Plus => "'+'",
+			TokenValue::Minus => "'-'",
 			TokenValue::Multiply => "'*'",
 			TokenValue::Divide => "'/'",
+			TokenValue::Modulo => "'%'",
 			TokenValue::Not => "'!'",
-			TokenValue::And => "'&'",
-			TokenValue::Or => "'|'",
-			TokenValue::ExclusiveOr => "'^'",
+			TokenValue::BitAnd => "'&'",
+			TokenValue::BitOr => "'|'",
+			TokenValue::BitXor => "'^'",
 			TokenValue::LeftShift => "\"<<\"",
 			TokenValue::RightShift => "\">>\"",
 			TokenValue::Number(..) => "number",
@@ -245,14 +246,15 @@ impl<'l> Tokenizer<'l>
 			b';' => (1, true, TokenValue::Terminator),
 			b':' => (1, true, TokenValue::LabelMark),
 			b'.' => (1, true, TokenValue::DirectiveMark),
-			b'+' => (1, true, TokenValue::Add),
-			b'-' => (1, true, TokenValue::Subtract),
+			b'+' => (1, true, TokenValue::Plus),
+			b'-' => (1, true, TokenValue::Minus),
 			b'*' => (1, true, TokenValue::Multiply),
 			b'/' => (1, true, TokenValue::Divide),
+			b'%' => (1, true, TokenValue::Modulo),
 			b'!' => (1, true, TokenValue::Not),
-			b'&' => (1, true, TokenValue::And),
-			b'|' => (1, true, TokenValue::Or),
-			b'^' => (1, true, TokenValue::ExclusiveOr),
+			b'&' => (1, true, TokenValue::BitAnd),
+			b'|' => (1, true, TokenValue::BitOr),
+			b'^' => (1, true, TokenValue::BitXor),
 			b'<' if self.data.len() >= 2 && self.data.as_bytes()[1] == b'<' => (2, true, TokenValue::LeftShift),
 			b'>' if self.data.len() >= 2 && self.data.as_bytes()[1] == b'>' => (2, true, TokenValue::RightShift),
 			b'0'..=b'9' =>
@@ -698,13 +700,13 @@ mod test
 		expect!(t, Positioned{value: TokenValue::Terminator, ..}, {});
 		expect!(t, Positioned{value: TokenValue::LabelMark, ..}, {});
 		expect!(t, Positioned{value: TokenValue::DirectiveMark, ..}, {});
-		expect!(t, Positioned{value: TokenValue::Add, ..}, {});
-		expect!(t, Positioned{value: TokenValue::Subtract, ..}, {});
+		expect!(t, Positioned{value: TokenValue::Plus, ..}, {});
+		expect!(t, Positioned{value: TokenValue::Minus, ..}, {});
 		expect!(t, Positioned{value: TokenValue::Multiply, ..}, {});
 		expect!(t, Positioned{value: TokenValue::Not, ..}, {});
-		expect!(t, Positioned{value: TokenValue::And, ..}, {});
-		expect!(t, Positioned{value: TokenValue::Or, ..}, {});
-		expect!(t, Positioned{value: TokenValue::ExclusiveOr, ..}, {});
+		expect!(t, Positioned{value: TokenValue::BitAnd, ..}, {});
+		expect!(t, Positioned{value: TokenValue::BitOr, ..}, {});
+		expect!(t, Positioned{value: TokenValue::BitXor, ..}, {});
 		expect!(t, Positioned{value: TokenValue::LeftShift, ..}, {});
 		expect!(t, Positioned{value: TokenValue::RightShift, ..}, {});
 		expect!(t, Positioned{value: TokenValue::BeginGroup, ..}, {});
@@ -736,7 +738,7 @@ mod test
 		expect!(t, Positioned{value: TokenValue::Separator, ..}, {});
 		expect!(t, Positioned{value: TokenValue::BeginAddr, ..}, {});
 		expect!(t, Positioned{value: TokenValue::Identifier(s), ..}, {assert_eq!(s, "R0");});
-		expect!(t, Positioned{value: TokenValue::Add, ..}, {});
+		expect!(t, Positioned{value: TokenValue::Plus, ..}, {});
 		expect!(t, Positioned{value: TokenValue::Number(Number::Integer(n)), ..}, {assert_eq!(n, 0x24);});
 		expect!(t, Positioned{value: TokenValue::EndAddr, ..}, {});
 		expect!(t, Positioned{value: TokenValue::Terminator, ..}, {});
