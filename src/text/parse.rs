@@ -1,8 +1,10 @@
+use core::cmp::Ordering;
 use core::fmt;
 use core::iter::FusedIterator;
 use std::borrow::Cow;
 use std::error::Error;
 
+use crate::text::operator::{BinOp, BinOpGroup};
 use crate::text::Positioned;
 use crate::text::token::{Number, Token, TokenError, Tokenizer, TokenValue};
 
@@ -125,17 +127,323 @@ impl<'l> Parser<'l>
 		self.0.get_column()
 	}
 	
-	fn expect(expect: &'static str, have: Token) -> ParseError
+	fn expect(expect: &'static str, have: &Token) -> ParseError
 	{
-		ParseError{value: ParseErrorKind::Expected{expect, have: have.value.desc()}, line: have.line, col: have.col}
+		ParseError{line: have.line, col: have.col, value: ParseErrorKind::Expected{expect, have: have.value.desc()}}
 	}
 	
 	fn eof(&self, expect: &'static str) -> ParseError
 	{
-		ParseError{value: ParseErrorKind::Expected{expect, have: "<eof>"}, line: self.0.get_line(), col: self.0.get_column()}
+		ParseError{line: self.0.get_line(), col: self.0.get_column(), value: ParseErrorKind::Expected{expect, have: "<eof>"}}
 	}
 	
-	pub fn next_element(&mut self) -> Option<Result<Element<'l>, ParseError>>
+	fn do_next(&mut self, first: Result<Token<'l>, TokenError>) -> Result<Element<'l>, ParseError>
+	{
+		match first
+		{
+			Ok(Token{line, col, value: TokenValue::DirectiveMark}) =>
+			{
+				let name = match self.0.next()
+				{
+					Some(Ok(Token{value: TokenValue::Identifier(ident), ..})) => ident,
+					Some(Ok(t)) => return Err(Self::expect("identifier", &t)),
+					Some(Err(e)) => return Err(e.into()),
+					None => return Err(self.eof("';'")),
+				};
+				match self.parse_args()
+				{
+					Ok(args) =>
+					{
+						self.next_inner("';'")?;
+						Ok(Element{line, col, value: ElementValue::Directive{name, args}})
+					},
+					Err(e) => Err(e),
+				}
+			},
+			Ok(Token{line, col, value: TokenValue::Identifier(name)}) =>
+			{
+				match self.0.peek()
+				{
+					Some(Ok(t)) =>
+					{
+						if matches!(t.value, TokenValue::LabelMark)
+						{
+							drop(self.0.next());
+							return Ok(Element{value: ElementValue::Label(name), line, col});
+						}
+					},
+					Some(Err(..)) => return Err(Positioned{line, col, value: ParseErrorKind::Token(self.0.next().unwrap().unwrap_err())}),
+					None => return Err(self.eof("<argument-list>")),
+				};
+				match self.parse_args()
+				{
+					Ok(args) =>
+					{
+						self.next_inner("';'")?;
+						Ok(Element{line, col, value: ElementValue::Instruction{name, args}})
+					},
+					Err(e) => Err(e),
+				}
+			},
+			Ok(t) => Err(Self::expect("<instruction>", &t)),
+			Err(e) => Err(e.into()),
+		}
+	}
+	
+	fn next_inner(&mut self, expect: &'static str) -> Result<Token<'l>, ParseError>
+	{
+		match self.0.next()
+		{
+			Some(Ok(t)) => Ok(t),
+			Some(Err(e)) => Err(e.into()),
+			None => Err(self.eof(expect)),
+		}
+	}
+	
+	fn parse_unary(&mut self) -> Result<Argument<'l>, ParseError>
+	{
+		let token = self.next_inner("<unary>")?;
+		match token.value
+		{
+			TokenValue::Minus => Ok(Argument::Negate(Box::new(self.parse_unary()?))),
+			TokenValue::Not => Ok(Argument::Not(Box::new(self.parse_unary()?))),
+			TokenValue::Number(val) => Ok(Argument::Constant(val)),
+			TokenValue::Identifier(ident) =>
+			{
+				if let Some(&Positioned{value: TokenValue::BeginGroup, ..}) = self.0.peek().and_then(Result::ok)
+				{
+					drop(self.0.next()); // (identifier '(') is enough to know it must be a function
+					let args = self.parse_args()?;
+					let end = self.next_inner("')'")?;
+					if !matches!(end.value, TokenValue::EndGroup)
+					{
+						return Err(Self::expect("')'", &end));
+					}
+					Ok(Argument::Function{name: ident, args})
+				}
+				else {Ok(Argument::Identifier(ident))}
+			},
+			TokenValue::String(val) => Ok(Argument::String(val)),
+			TokenValue::BeginGroup =>
+			{
+				let expr_start = match self.0.peek()
+				{
+					Some(Ok(t)) => t.convert(()),
+					_ => Positioned{line: self.0.get_line(), col: self.0.get_column(), value: ()},
+				};
+				let inner = self.parse_binary(BinOpGroup::BitOr, expr_start)?; // any operator
+				let end = self.next_inner("')'")?;
+				if !matches!(end.value, TokenValue::EndGroup)
+				{
+					return Err(Self::expect("')'", &end));
+				}
+				Ok(inner)
+			},
+			TokenValue::BeginAddr =>
+			{
+				let expr_start = match self.0.peek()
+				{
+					Some(Ok(t)) => t.convert(()),
+					_ => Positioned{line: self.0.get_line(), col: self.0.get_column(), value: ()},
+				};
+				let inner = self.parse_binary(BinOpGroup::BitOr, expr_start)?; // any operator
+				let end = self.next_inner("']'")?;
+				if !matches!(end.value, TokenValue::EndAddr)
+				{
+					return Err(Self::expect("']'", &end));
+				}
+				Ok(Argument::Address(Box::new(inner)))
+			},
+			TokenValue::BeginSeq =>
+			{
+				let args = self.parse_args()?;
+				let end = self.next_inner("'}'")?;
+				if !matches!(end.value, TokenValue::EndSeq)
+				{
+					return Err(Self::expect("'}'", &end));
+				}
+				Ok(Argument::Sequence(args))
+			},
+			_ => Err(Self::expect("<unary>", &token)),
+		}
+	}
+	
+	fn parse_binary(&mut self, group: BinOpGroup, expr_start: Positioned<()>) -> Result<Argument<'l>, ParseError>
+	{
+		let mut first_arg = Some(match group.higher()
+		{
+			None => self.parse_unary()?,
+			Some(part) => self.parse_binary(part, expr_start)?,
+		});
+		let mut operator = None;
+		let mut args = Vec::new();
+		loop
+		{
+			let op = match self.0.peek()
+			{
+				None => break,
+				Some(Ok(op_token)) =>
+				{
+					match op_token.value
+					{
+						TokenValue::Separator | TokenValue::Terminator | TokenValue::EndGroup
+							| TokenValue::EndAddr | TokenValue::EndSeq => break,
+						_ => (),
+					}
+					match BinOp::decode(&op_token.value)
+					{
+						Some(op) =>
+						{
+							match Ord::cmp(&op.into(), &group)
+							{
+								// an outer recursive call will handle this one
+								Ordering::Less => break,
+								Ordering::Equal => (),
+								// an inner recursive call should have consumed this operator at some stage
+								Ordering::Greater => panic!("encountered operator {op:?} in group {group:?}"),
+							}
+							self.0.next();
+							op
+						},
+						// returning an error drops the tokenizer so we don't have to consume the inner error
+						_ => return Err(Self::expect("<operator>", op_token)),
+					}
+				},
+				Some(Err(..)) => return Err(expr_start.convert(ParseErrorKind::Token(self.0.next().unwrap().unwrap_err()))),
+			};
+			
+			match operator
+			{
+				Some(prev_op) if prev_op != op =>
+				{
+					// we've encountered a repeatable binary operator which means at least 2 operands
+					assert!(first_arg.is_none() && args.len() >= 2);
+					first_arg = Some(match prev_op
+					{
+						BinOp::Add => Argument::Add(args),
+						BinOp::Subtract => Argument::Subtract(args),
+						BinOp::Multiply => Argument::Multiply(args),
+						BinOp::BitAnd => Argument::BitAnd(args),
+						BinOp::BitOr => Argument::BitOr(args),
+						BinOp::BitXor => Argument::BitXor(args),
+						_ => unreachable!("{prev_op:?} is strictly binary"),
+					});
+					args = Vec::new();
+				},
+				_ => (),
+			}
+			
+			let next_arg = match group.higher()
+			{
+				None => self.parse_unary()?,
+				Some(part) => self.parse_binary(part, expr_start)?,
+			};
+			match op
+			{
+				BinOp::Divide | BinOp::Modulo | BinOp::LeftShift | BinOp::RightShift =>
+				{
+					assert!(first_arg.is_some() && args.is_empty());
+					first_arg = Some(match op
+					{
+						BinOp::Divide => Argument::Divide{value: Box::new(first_arg.unwrap()), divisor: Box::new(next_arg)},
+						BinOp::Modulo => Argument::Modulo{value: Box::new(first_arg.unwrap()), divisor: Box::new(next_arg)},
+						BinOp::LeftShift => Argument::LeftShift{value: Box::new(first_arg.unwrap()), shift: Box::new(next_arg)},
+						BinOp::RightShift => Argument::RightShift{value: Box::new(first_arg.unwrap()), shift: Box::new(next_arg)},
+						_ => unreachable!(),
+					});
+					operator = None;
+				},
+				BinOp::Add | BinOp::Subtract | BinOp::Multiply | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor =>
+				{
+					if let Some(first) = first_arg.take() {args.push(first);}
+					args.push(next_arg);
+					operator = Some(op);
+				},
+			}
+		}
+		
+		if let Some(arg) = first_arg
+		{
+			assert!(args.is_empty());
+			return Ok(arg);
+		}
+		assert!(args.len() >= 2);
+		Ok(match operator
+		{
+			Some(BinOp::Add) => Argument::Add(args),
+			Some(BinOp::Subtract) => Argument::Subtract(args),
+			Some(BinOp::Multiply) => Argument::Multiply(args),
+			Some(BinOp::BitAnd) => Argument::BitAnd(args),
+			Some(BinOp::BitOr) => Argument::BitOr(args),
+			Some(BinOp::BitXor) => Argument::BitXor(args),
+			op => unreachable!("{op:?} is strictly binary"),
+		})
+	}
+	
+	fn parse_args(&mut self) -> Result<Vec<Argument<'l>>, ParseError>
+	{
+		match self.0.peek()
+		{
+			// having an argument list end with (<eof>) might be valid in some cases
+			None => return Ok(Vec::new()),
+			Some(Ok(t)) =>
+			{
+				if matches!(t.value, TokenValue::Terminator | TokenValue::EndGroup | TokenValue::EndAddr | TokenValue::EndSeq)
+				{
+					// the argument list is empty
+					return Ok(Vec::new());
+				}
+			},
+			Some(Err(..)) =>
+			{
+				let err = self.0.next().unwrap().unwrap_err();
+				return Err(Positioned{line: err.line, col: err.col, value: ParseErrorKind::Token(err)});
+			},
+		}
+		
+		let mut args = Vec::new();
+		loop
+		{
+			let expr_start = match self.0.peek()
+			{
+				Some(Ok(t)) => t.convert(()),
+				_ => Positioned{line: self.0.get_line(), col: self.0.get_column(), value: ()},
+			};
+			let arg = self.parse_binary(BinOpGroup::BitOr, expr_start)?; // any operator
+			args.push(arg);
+			
+			match self.0.peek()
+			{
+				None => return Err(self.eof("<separator>")),
+				Some(Ok(t)) =>
+				{
+					match t.value
+					{
+						TokenValue::Separator =>
+						{
+							drop(self.0.next());
+							
+						},
+						TokenValue::Terminator | TokenValue::EndGroup | TokenValue::EndAddr | TokenValue::EndSeq => break,
+						_ => return Err(Self::expect("<separator>", t)),
+					}
+				},
+				Some(Err(..)) =>
+				{
+					let err = self.0.next().unwrap().unwrap_err();
+					return Err(Positioned{line: err.line, col: err.col, value: ParseErrorKind::Token(err)});
+				},
+			}
+		}
+		Ok(args)
+	}
+}
+
+impl<'l> Iterator for Parser<'l>
+{
+	type Item = Result<Element<'l>, ParseError>;
+	
+	fn next(&mut self) -> Option<Self::Item>
 	{
 		match self.0.next()
 		{
@@ -153,183 +461,6 @@ impl<'l> Parser<'l>
 			},
 			None => None,
 		}
-	}
-	
-	fn do_next(&mut self, first: Result<Token<'l>, TokenError>) -> Result<Element<'l>, ParseError>
-	{
-		match first
-		{
-			Ok(Token{value: TokenValue::DirectiveMark, line, col}) =>
-			{
-				let name = match self.0.next()
-				{
-					Some(Ok(Token{value: TokenValue::Identifier(ident), ..})) => ident,
-					Some(Ok(t)) => return Err(Self::expect("identifier", t)),
-					Some(Err(e)) => return Err(e.into()),
-					None => return Err(self.eof("';'")),
-				};
-				match self.parse_args(None)
-				{
-					Ok(args) => Ok(Element{value: ElementValue::Directive{name, args}, line, col}),
-					Err(e) => Err(e),
-				}
-			},
-			Ok(Token{value: TokenValue::Identifier(name), line, col}) =>
-			{
-				let curr = match self.0.next()
-				{
-					Some(Ok(Token{value: TokenValue::LabelMark, ..})) => return Ok(Element{value: ElementValue::Label(name), line, col}),
-					Some(Ok(t)) => t,
-					Some(Err(e)) => return Err(e.into()),
-					None => return Err(self.eof("';'")),
-				};
-				match self.parse_args(Some(curr))
-				{
-					Ok(args) => Ok(Element{value: ElementValue::Instruction{name, args}, line, col}),
-					Err(e) => Err(e),
-				}
-			},
-			Ok(t) => Err(Self::expect("';'", t)),
-			Err(e) => Err(e.into()),
-		}
-	}
-	
-	fn next_inner(&mut self, expect: &'static str) -> Result<Token<'l>, ParseError>
-	{
-		match self.0.next()
-		{
-			Some(Ok(t)) => Ok(t),
-			Some(Err(e)) => Err(e.into()),
-			None => Err(self.eof(expect)),
-		}
-	}
-	
-	/*
-	fn parse_arg(&mut self, peek: &mut Option<Token<'l>>, until: impl Fn(&Token) -> bool) -> Result<Argument<'l>, ParseError>
-	{
-		// TODO
-	}
-	*/
-	
-	fn parse_args(&mut self, peek: Option<Token<'l>>) -> Result<Vec<Argument<'l>>, ParseError>
-	{
-		let mut args = Vec::new();
-		let mut curr = match peek
-		{
-			None => self.next_inner("';'")?,
-			Some(t) => t,
-		};
-		if let TokenValue::Terminator = curr.value
-		{
-			return Ok(args);
-		}
-		
-		loop
-		{
-			match curr.value
-			{
-				TokenValue::Number(val) =>
-				{
-					args.push(Argument::Constant(val));
-					// TODO parse expressions
-				},
-				TokenValue::Identifier(ident) =>
-				{
-					args.push(Argument::Identifier(ident));
-					// TODO parse expressions
-				},
-				TokenValue::String(val) =>
-				{
-					args.push(Argument::String(val));
-					// TODO parse expressions
-				},
-				TokenValue::BeginAddr =>
-				{
-					curr = self.next_inner("<expression>")?;
-					let mut expr = match curr.value
-					{
-						TokenValue::Number(val) => Argument::Constant(val),
-						TokenValue::Identifier(ident) => Argument::Identifier(ident),
-						_ => return Err(Self::expect("<expression>", curr)),
-					};
-					loop
-					{
-						curr = self.next_inner("']'")?;
-						match curr.value
-						{
-							TokenValue::Plus => (),
-							TokenValue::EndAddr => break,
-							_ => return Err(Self::expect("']'", curr)),
-						}
-						// TODO track operation
-						curr = self.next_inner("<expression>")?;
-						let new = match curr.value
-						{
-							TokenValue::Number(val) => Argument::Constant(val),
-							TokenValue::Identifier(ident) => Argument::Identifier(ident),
-							_ => return Err(Self::expect("<expression>", curr)),
-						};
-						match expr
-						{
-							Argument::Constant(..) | Argument::Identifier(..) => expr = Argument::Add(vec![expr, new]),
-							Argument::Add(ref mut parts) => parts.push(new),
-							_ => panic!("unsupported expression {expr:?}"),
-						}
-					}
-					args.push(Argument::Address(Box::new(expr)));
-				},
-				TokenValue::BeginSeq =>
-				{
-					curr = self.next_inner("<expression>")?;
-					if let TokenValue::EndSeq = curr.value
-					{
-						args.push(Argument::Sequence(Vec::new()));
-					}
-					else
-					{
-						let mut seq = Vec::new();
-						loop
-						{
-							match curr.value
-							{
-								TokenValue::Number(val) => seq.push(Argument::Constant(val)),
-								TokenValue::Identifier(ident) => seq.push(Argument::Identifier(ident)),
-								TokenValue::String(val) => seq.push(Argument::String(val)),
-								_ => return Err(Self::expect("<expression>", curr)),
-							}
-							curr = self.next_inner("'}'")?;
-							match curr.value
-							{
-								TokenValue::Separator => (),
-								TokenValue::EndSeq => break,
-								_ => return Err(Self::expect("'}'", curr)),
-							}
-							curr = self.next_inner("<expression>")?;
-						}
-						args.push(Argument::Sequence(seq));
-					}
-				},
-				_ => return Err(Self::expect("<expression>", curr)),
-			}
-			curr = self.next_inner("';'")?;
-			match curr.value
-			{
-				TokenValue::Separator => (),
-				TokenValue::Terminator => return Ok(args),
-				_ => return Err(Self::expect("';'", curr)),
-			}
-			curr = self.next_inner("<expression>")?;
-		}
-	}
-}
-
-impl<'l> Iterator for Parser<'l>
-{
-	type Item = Result<Element<'l>, ParseError>;
-	
-	fn next(&mut self) -> Option<Self::Item>
-	{
-		self.next_element()
 	}
 }
 
