@@ -8,6 +8,9 @@ use crate::text::operator::{BinOp, BinOpGroup};
 use crate::text::Positioned;
 use crate::text::token::{Number, Token, TokenError, Tokenizer, TokenValue};
 
+#[cfg(test)]
+mod test;
+
 // FIXME these should contain their own location info (or skip element parsing)
 #[derive(Clone, Debug)]
 pub enum Argument<'l>
