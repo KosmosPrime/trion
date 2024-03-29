@@ -175,6 +175,10 @@ impl<'l> Context<'l>
 	
 	pub fn insert_constant(&mut self, name: &str, value: i64, realm: Realm) -> Result<bool, ConstantError>
 	{
+		if self.instructions.is_register(name)
+		{
+			return Err(ConstantError::Reserved(name.to_owned()));
+		}
 		let constants = match realm
 		{
 			Realm::Global => &mut self.globals,
@@ -203,8 +207,12 @@ impl<'l> Context<'l>
 		}
 	}
 	
-	pub fn replace_constant(&mut self, name: &str, value: i64, realm: Realm) -> Lookup
+	pub fn replace_constant(&mut self, name: &str, value: i64, realm: Realm) -> Result<Lookup, ConstantError>
 	{
+		if self.instructions.is_register(name)
+		{
+			return Err(ConstantError::Reserved(name.to_owned()));
+		}
 		let constants = match realm
 		{
 			Realm::Global => &mut self.globals,
@@ -222,24 +230,28 @@ impl<'l> Context<'l>
 			None =>
 			{
 				constants.insert(name.to_owned(), Some(value));
-				Lookup::NotFound
+				Ok(Lookup::NotFound)
 			},
 			Some(dst @ None) =>
 			{
 				*dst = Some(value);
-				Lookup::Deferred
+				Ok(Lookup::Deferred)
 			},
 			Some(Some(have)) =>
 			{
 				let prev = *have;
 				*have = value;
-				Lookup::Found(prev)
+				Ok(Lookup::Found(prev))
 			},
 		}
 	}
 	
 	pub fn defer_constant(&mut self, name: &str, realm: Realm) -> Result<(), ConstantError>
 	{
+		if self.instructions.is_register(name)
+		{
+			return Err(ConstantError::Reserved(name.to_owned()));
+		}
 		let constants = match realm
 		{
 			Realm::Global => &mut self.globals,
@@ -589,6 +601,7 @@ impl ActiveSegment
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConstantError
 {
+	Reserved(String),
 	NotFound{name: String, realm: Realm},
 	Duplicate{name: String, realm: Realm},
 	Range{min: i64, max: i64, have: i64},
@@ -601,6 +614,7 @@ impl fmt::Display for ConstantError
 	{
 		match *self
 		{
+			Self::Reserved(ref name) => write!(f, "reserved name {name:?}"),
 			Self::NotFound{ref name, realm} => write!(f, "no such {realm} constant {name:?}"),
 			Self::Duplicate{ref name, realm} => write!(f, "duplicate {realm} constant {name}"),
 			Self::Range{min, max, have} => write!(f, "label out of range ({min} to {max}, got {have})"),
