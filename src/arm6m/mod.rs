@@ -26,6 +26,26 @@ pub struct Arm6M;
 
 impl InstructionSet for Arm6M
 {
+	fn is_register(&self, name: &str) -> bool
+	{
+		if name.len() <= 8
+		{
+			let mut temp = [0u8; 8];
+			temp[..name.len()].copy_from_slice(name.as_bytes());
+			temp.make_ascii_uppercase();
+			match &temp[..name.len()]
+			{
+				b"R0" | b"R1" | b"R2" | b"R3" | b"R4" | b"R5" | b"R6" | b"R7" => true,
+				b"R8" | b"R9" | b"R10" | b"R11" | b"R12" => true,
+				b"R13" | b"SP" | b"R14" | b"LR" | b"R15" | b"PC" => true,
+				b"APSR" | b"IAPSR" | b"EAPSR" | b"XPSR" | b"IPSR" | b"EPSR" | b"IEPSR" => true,
+				b"MSP" | b"PSP" | b"PRIMASK" | b"CONTROL" => true,
+				_ => false
+			}
+		}
+		else {false}
+	}
+	
 	fn assemble<'c>(&self, ctx: &'c mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
 		let mut arg_pos = 0;
