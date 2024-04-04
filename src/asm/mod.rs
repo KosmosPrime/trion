@@ -15,6 +15,7 @@ pub mod constant;
 pub mod directive;
 pub mod instr;
 pub mod memory;
+pub mod simplify;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ErrorLevel
