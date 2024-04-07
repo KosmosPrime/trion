@@ -4,6 +4,8 @@ use std::error::Error;
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
 
+mod eval;
+pub use eval::*;
 #[cfg(test)]
 mod test;
 
