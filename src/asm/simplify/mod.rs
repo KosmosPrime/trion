@@ -62,7 +62,7 @@ fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 				let (neutral, op): (i64, fn(i64, i64) -> Option<i64>) = match arg_ty
 				{
 					ArgumentType::Add => (0, i64::checked_add),
-					ArgumentType::Subtract => (0, i64::checked_sub),
+					ArgumentType::Subtract => (0, if start == 0 {i64::checked_sub} else {i64::checked_add}),
 					ArgumentType::Multiply => (1, i64::checked_mul),
 					_ => unreachable!(),
 				};

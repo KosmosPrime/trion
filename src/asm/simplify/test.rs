@@ -170,6 +170,20 @@ fn simplify_addsub()
 			const EXPECT: i64 = 9 - 3 - 7 + 1 - 5 - -2;
 			assert!(matches!(val, Argument::Constant(Number::Integer(EXPECT))), "{val:?}");
 		},
+		"2 - start - 3" => {Ok(val)} in
+		{
+			let Argument::Subtract(ref args) = val else {panic!("{val:?}")};
+			assert_eq!(args.len(), 2);
+			assert!(matches!(args[0], Argument::Constant(Number::Integer(-1))), "{:?}", args[0]);
+			assert!(matches!(args[1], Argument::Identifier("start")), "{:?}", args[1]);
+		},
+		"start - 2 - 3" => {Ok(val)} in
+		{
+			let Argument::Subtract(ref args) = val else {panic!("{val:?}")};
+			assert_eq!(args.len(), 2);
+			assert!(matches!(args[0], Argument::Identifier("start")), "{:?}", args[0]);
+			assert!(matches!(args[1], Argument::Constant(Number::Integer(5))), "{:?}", args[1]);
+		},
 	};
 }
 
