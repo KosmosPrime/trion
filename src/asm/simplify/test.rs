@@ -112,10 +112,9 @@ fn simplify_str()
 		},
 		"5 - 2 & \"order\"" => {Err(v, e)} in
 		{
-			let Argument::BitAnd(ref args) = v else {panic!("structure error, got {v:?}")};
-			assert_eq!(args.len(), 2);
-			assert!(matches!(args[0], Argument::Constant(Number::Integer(3))), "{:?}", args[0]);
-			assert!(matches!(args[1], Argument::String(ref s) if s == "order"), "{:?}", args[1]);
+			let Argument::BitAnd{ref lhs, ref rhs} = v else {panic!("structure error, got {v:?}")};
+			assert!(matches!(**lhs, Argument::Constant(Number::Integer(3))), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::String(ref s) if s == "order"), "{rhs:?}");
 			assert!(matches!(e, SimplifyError::BadType{kind: ArgumentType::String, op: ArgumentType::BitAnd}), "{v:?} -> {e:?}");
 		},
 		"[\"insane\"]" => {Err(v, e)} in
@@ -132,32 +131,29 @@ fn simplify_addsub()
 	{
 		"2 + 3 + pre" => {Ok(val)} in
 		{
-			let Argument::Add(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 2);
-			assert!(matches!(args[0], Argument::Constant(Number::Integer(5))), "{:?}", args[0]);
-			assert!(matches!(args[1], Argument::Identifier("pre")), "{:?}", args[1]);
+			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Constant(Number::Integer(5))), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Identifier("pre")), "{rhs:?}");
 		},
 		"post + 2 + 3" => {Ok(val)} in
 		{
-			let Argument::Add(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 2);
-			assert!(matches!(args[0], Argument::Identifier("post")), "{:?}", args[0]);
-			assert!(matches!(args[1], Argument::Constant(Number::Integer(5))), "{:?}", args[1]);
+			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Identifier("post")), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Constant(Number::Integer(5))), "{rhs:?}");
 		},
 		"in + 2 + 3 + ner" => {Ok(val)} in
 		{
-			let Argument::Add(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 3);
-			assert!(matches!(args[0], Argument::Identifier("in")), "{:?}", args[0]);
-			assert!(matches!(args[1], Argument::Constant(Number::Integer(5))), "{:?}", args[1]);
-			assert!(matches!(args[2], Argument::Identifier("ner")), "{:?}", args[2]);
+			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			let Argument::Add{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{val:?}")};
+			assert!(matches!(**llhs, Argument::Identifier("in")), "{llhs:?}");
+			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(5))), "{rlhs:?}");
+			assert!(matches!(**rhs, Argument::Identifier("ner")), "{rhs:?}");
 		},
 		"2 + 3 + outer + 6" => {Ok(val)} in
 		{
-			let Argument::Add(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 2);
-			assert!(matches!(args[0], Argument::Constant(Number::Integer(11))), "{:?}", args[0]);
-			assert!(matches!(args[1], Argument::Identifier("outer")), "{:?}", args[1]);
+			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Constant(Number::Integer(11))), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Identifier("outer")), "{rhs:?}");
 		},
 		"((2 + 3) + 4 - 1)" => {Ok(val)} in
 		{
@@ -172,17 +168,23 @@ fn simplify_addsub()
 		},
 		"2 - start - 3" => {Ok(val)} in
 		{
-			let Argument::Subtract(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 2);
-			assert!(matches!(args[0], Argument::Constant(Number::Integer(-1))), "{:?}", args[0]);
-			assert!(matches!(args[1], Argument::Identifier("start")), "{:?}", args[1]);
+			let Argument::Subtract{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Constant(Number::Integer(-1))), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Identifier("start")), "{rhs:?}");
 		},
 		"start - 2 - 3" => {Ok(val)} in
 		{
-			let Argument::Subtract(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 2);
-			assert!(matches!(args[0], Argument::Identifier("start")), "{:?}", args[0]);
-			assert!(matches!(args[1], Argument::Constant(Number::Integer(5))), "{:?}", args[1]);
+			let Argument::Subtract{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Identifier("start")), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Constant(Number::Integer(5))), "{rhs:?}");
+		},
+		"(v0 - 2) + (3 - v1)" => {Ok(val)} in
+		{
+			let Argument::Subtract{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			let Argument::Add{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{lhs:?}")};
+			assert!(matches!(**llhs, Argument::Identifier("v0")), "{llhs:?}");
+			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(1))), "{rlhs:?}");
+			assert!(matches!(**rhs, Argument::Identifier("v1")), "{rhs:?}");
 		},
 	};
 }
@@ -201,9 +203,33 @@ fn simplify_muldiv()
 			const EXPECT: i64 = 1234 / 44;
 			assert!(matches!(val, Argument::Constant(Number::Integer(EXPECT))), "{val:?}");
 		},
+		"lhs / 7 / rhs / 13" => {Ok(val)} in
+		{
+			const EXPECT: i64 = 7 * 13;
+			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			let Argument::Divide{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{lhs:?}")};
+			assert!(matches!(**llhs, Argument::Identifier("lhs")), "{llhs:?}");
+			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(EXPECT))), "{rlhs:?}");
+			assert!(matches!(**rhs, Argument::Identifier("rhs")), "{rhs:?}");
+		},
+		"14 / lhs / rhs / 13" => {Ok(val)} in
+		{
+			const EXPECT: i64 = 14 / 13;
+			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			let Argument::Divide{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{lhs:?}")};
+			assert!(matches!(**llhs, Argument::Constant(Number::Integer(EXPECT))), "{llhs:?}");
+			assert!(matches!(**rlhs, Argument::Identifier("lhs")), "{rlhs:?}");
+			assert!(matches!(**rhs, Argument::Identifier("rhs")), "{rhs:?}");
+		},
 		"567 % 10" => {Ok(val)} in
 		{
 			assert!(matches!(val, Argument::Constant(Number::Integer(7))), "{val:?}");
+		},
+		"value % 10 % 11" => {Ok(val)} in
+		{
+			let Argument::Modulo{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Identifier("value")), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Constant(Number::Integer(10))), "{rhs:?}");
 		},
 		"1 / 0" => {Err(v, e)} in
 		{
@@ -212,6 +238,12 @@ fn simplify_muldiv()
 		"0 / 0" => {Err(v, e)} in
 		{
 			assert!(matches!(e, SimplifyError::Overflow(OverflowError::DivideByZero(Number::Integer(0)))), "{v:?} -> {e:?}");
+		},
+		"value / 0" => {Ok(val)} in
+		{
+			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Identifier("value")), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Constant(Number::Integer(0))), "{rhs:?}");
 		},
 		"1 % 0" => {Err(v, e)} in
 		{
@@ -268,6 +300,12 @@ fn simplify_expr()
 		{
 			const EXPECT: i64 = (1 << 8 + 8) * 33 - 89 * 33 & (0b1000 | 2) * 0x1111 | 222;
 			assert!(matches!(val, Argument::Constant(Number::Integer(EXPECT))), "{val:?}");
+		},
+		"(value / 4 + 0) / 2" => {Ok(val)} in
+		{
+			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Identifier("value")), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Constant(Number::Integer(8))), "{rhs:?}");
 		},
 	};
 }
@@ -328,32 +366,29 @@ fn evaluate_ok()
 		"addr1 + r0 * 4 + 3", ctx => {Ok(val, r)} in
 		{
 			assert_eq!(r, Evaluation::Complete);
-			let Argument::Add(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 2);
-			assert!(matches!(args[0], Argument::Constant(Number::Integer(0x10000003))), "{:?}", args[0]);
-			let Argument::Multiply(ref inner) = args[1] else {panic!("{:?}", args[1])};
-			assert_eq!(inner.len(), 2);
-			assert!(matches!(inner[0], Argument::Identifier("r0")), "{:?}", inner[0]);
-			assert!(matches!(inner[1], Argument::Constant(Number::Integer(4))), "{:?}", inner[1]);
+			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Constant(Number::Integer(0x10000003))), "{lhs:?}");
+			let Argument::Multiply{lhs: ref llhs, rhs: ref rlhs} = **rhs else {panic!("{rhs:?}")};
+			assert!(matches!(**llhs, Argument::Identifier("r0")), "{llhs:?}");
+			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(4))), "{rlhs:?}");
 		},
 		"base + r0 * 4 + 3", ctx => {Ok(val, r)} in
 		{
 			assert_eq!(r, Evaluation::Deferred);
-			let Argument::Add(ref args) = val else {panic!("{val:?}")};
-			assert_eq!(args.len(), 3);
-			assert!(matches!(args[0], Argument::Identifier("base")), "{:?}", args[0]);
-			let Argument::Multiply(ref inner) = args[1] else {panic!("{:?}", args[1])};
-			assert_eq!(inner.len(), 2);
-			assert!(matches!(inner[0], Argument::Identifier("r0")), "{:?}", inner[0]);
-			assert!(matches!(inner[1], Argument::Constant(Number::Integer(4))), "{:?}", inner[1]);
-			assert!(matches!(args[2], Argument::Constant(Number::Integer(3))), "{:?}", args[2]);
+			let Argument::Add{lhs: ref mid, ref rhs} = val else {panic!("{val:?}")};
+			let Argument::Add{ref lhs, rhs: ref mhs} = **mid else {panic!("{mid:?}")};
+			assert!(matches!(**lhs, Argument::Identifier("base")), "{lhs:?}");
+			let Argument::Multiply{lhs: ref lmhs, rhs: ref rmhs} = **mhs else {panic!("{mhs:?}")};
+			assert!(matches!(**lmhs, Argument::Identifier("r0")), "{lmhs:?}");
+			assert!(matches!(**rmhs, Argument::Constant(Number::Integer(4))), "{rmhs:?}");
+			assert!(matches!(**rhs, Argument::Constant(Number::Integer(3))), "{rhs:?}");
 		},
 		"paragraph % zero", ctx => {Ok(val, r)} in
 		{
 			assert_eq!(r, Evaluation::Deferred);
-			let Argument::Modulo{value, divisor} = val else {panic!("{val:?}")};
-			assert!(matches!(*value, Argument::Identifier("paragraph")), "{value:?}");
-			assert!(matches!(*divisor, Argument::Constant(Number::Integer(0))), "{divisor:?}");
+			let Argument::Modulo{ref lhs, ref rhs} = val else {panic!("{val:?}")};
+			assert!(matches!(**lhs, Argument::Identifier("paragraph")), "{lhs:?}");
+			assert!(matches!(**rhs, Argument::Constant(Number::Integer(0))), "{rhs:?}");
 		}
 	};
 }

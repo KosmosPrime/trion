@@ -18,18 +18,18 @@ pub enum Argument<'l>
 	Constant(Number),
 	Identifier(&'l str),
 	String(Cow<'l, str>),
-	Add(Vec<Argument<'l>>),
+	Add{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
 	Negate(Box<Argument<'l>>),
-	Subtract(Vec<Argument<'l>>),
-	Multiply(Vec<Argument<'l>>),
-	Divide{value: Box<Argument<'l>>, divisor: Box<Argument<'l>>},
-	Modulo{value: Box<Argument<'l>>, divisor: Box<Argument<'l>>},
+	Subtract{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
+	Multiply{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
+	Divide{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
+	Modulo{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
 	Not(Box<Argument<'l>>),
-	BitAnd(Vec<Argument<'l>>),
-	BitOr(Vec<Argument<'l>>),
-	BitXor(Vec<Argument<'l>>),
-	LeftShift{value: Box<Argument<'l>>, shift: Box<Argument<'l>>},
-	RightShift{value: Box<Argument<'l>>, shift: Box<Argument<'l>>},
+	BitAnd{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
+	BitOr{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
+	BitXor{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
+	LeftShift{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
+	RightShift{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
 	Address(Box<Argument<'l>>),
 	Sequence(Vec<Argument<'l>>),
 	Function{name: &'l str, args: Vec<Argument<'l>>},
@@ -44,16 +44,16 @@ impl<'l> Argument<'l>
 			Self::Constant(..) => ArgumentType::Constant,
 			Self::Identifier(..) => ArgumentType::Identifier,
 			Self::String(..) => ArgumentType::String,
-			Self::Add(..) => ArgumentType::Add,
+			Self::Add{..} => ArgumentType::Add,
 			Self::Negate(..) => ArgumentType::Negate,
-			Self::Subtract(..) => ArgumentType::Subtract,
-			Self::Multiply(..) => ArgumentType::Multiply,
+			Self::Subtract{..} => ArgumentType::Subtract,
+			Self::Multiply{..} => ArgumentType::Multiply,
 			Self::Divide{..} => ArgumentType::Divide,
 			Self::Modulo{..} => ArgumentType::Modulo,
 			Self::Not(..) => ArgumentType::Not,
-			Self::BitAnd(..) => ArgumentType::BitAnd,
-			Self::BitOr(..) => ArgumentType::BitOr,
-			Self::BitXor(..) => ArgumentType::BitXor,
+			Self::BitAnd{..} => ArgumentType::BitAnd,
+			Self::BitOr{..} => ArgumentType::BitOr,
+			Self::BitXor{..} => ArgumentType::BitXor,
 			Self::LeftShift{..} => ArgumentType::LeftShift,
 			Self::RightShift{..} => ArgumentType::RightShift,
 			Self::Address(..) => ArgumentType::Address,
@@ -273,13 +273,11 @@ impl<'l> Parser<'l>
 	
 	fn parse_binary(&mut self, group: BinOpGroup, expr_start: Positioned<()>) -> Result<Argument<'l>, ParseError>
 	{
-		let mut first_arg = Some(match group.higher()
+		let mut lhs = match group.higher()
 		{
 			None => self.parse_unary()?,
 			Some(part) => self.parse_binary(part, expr_start)?,
-		});
-		let mut operator = None;
-		let mut args = Vec::new();
+		};
 		loop
 		{
 			let op = match self.0.peek()
@@ -315,72 +313,26 @@ impl<'l> Parser<'l>
 				Some(Err(..)) => return Err(expr_start.convert(ParseErrorKind::Token(self.0.next().unwrap().unwrap_err()))),
 			};
 			
-			match operator
-			{
-				Some(prev_op) if prev_op != op =>
-				{
-					// we've encountered a repeatable binary operator which means at least 2 operands
-					assert!(first_arg.is_none() && args.len() >= 2);
-					first_arg = Some(match prev_op
-					{
-						BinOp::Add => Argument::Add(args),
-						BinOp::Subtract => Argument::Subtract(args),
-						BinOp::Multiply => Argument::Multiply(args),
-						BinOp::BitAnd => Argument::BitAnd(args),
-						BinOp::BitOr => Argument::BitOr(args),
-						BinOp::BitXor => Argument::BitXor(args),
-						_ => unreachable!("{prev_op:?} is strictly binary"),
-					});
-					args = Vec::new();
-				},
-				_ => (),
-			}
-			
-			let next_arg = match group.higher()
+			let rhs = match group.higher()
 			{
 				None => self.parse_unary()?,
 				Some(part) => self.parse_binary(part, expr_start)?,
 			};
-			match op
+			lhs = match op
 			{
-				BinOp::Divide | BinOp::Modulo | BinOp::LeftShift | BinOp::RightShift =>
-				{
-					assert!(first_arg.is_some() && args.is_empty());
-					first_arg = Some(match op
-					{
-						BinOp::Divide => Argument::Divide{value: Box::new(first_arg.unwrap()), divisor: Box::new(next_arg)},
-						BinOp::Modulo => Argument::Modulo{value: Box::new(first_arg.unwrap()), divisor: Box::new(next_arg)},
-						BinOp::LeftShift => Argument::LeftShift{value: Box::new(first_arg.unwrap()), shift: Box::new(next_arg)},
-						BinOp::RightShift => Argument::RightShift{value: Box::new(first_arg.unwrap()), shift: Box::new(next_arg)},
-						_ => unreachable!(),
-					});
-					operator = None;
-				},
-				BinOp::Add | BinOp::Subtract | BinOp::Multiply | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor =>
-				{
-					if let Some(first) = first_arg.take() {args.push(first);}
-					args.push(next_arg);
-					operator = Some(op);
-				},
-			}
+				BinOp::Add => Argument::Add{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::Subtract => Argument::Subtract{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::Multiply => Argument::Multiply{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::Divide => Argument::Divide{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::Modulo => Argument::Modulo{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::BitAnd => Argument::BitAnd{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::BitOr => Argument::BitOr{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::BitXor => Argument::BitXor{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::LeftShift => Argument::LeftShift{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+				BinOp::RightShift => Argument::RightShift{lhs: Box::new(lhs), rhs: Box::new(rhs)},
+			};
 		}
-		
-		if let Some(arg) = first_arg
-		{
-			assert!(args.is_empty());
-			return Ok(arg);
-		}
-		assert!(args.len() >= 2);
-		Ok(match operator
-		{
-			Some(BinOp::Add) => Argument::Add(args),
-			Some(BinOp::Subtract) => Argument::Subtract(args),
-			Some(BinOp::Multiply) => Argument::Multiply(args),
-			Some(BinOp::BitAnd) => Argument::BitAnd(args),
-			Some(BinOp::BitOr) => Argument::BitOr(args),
-			Some(BinOp::BitXor) => Argument::BitXor(args),
-			op => unreachable!("{op:?} is strictly binary"),
-		})
+		Ok(lhs)
 	}
 	
 	fn parse_args(&mut self) -> Result<Vec<Argument<'l>>, ParseError>

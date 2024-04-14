@@ -35,31 +35,15 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 		{
 			let eval = match arg
 			{
-				Argument::Add(args) | Argument::Subtract(args) | Argument::Multiply(args) | Argument::BitAnd(args) | Argument::BitOr(args) 
-					| Argument::BitXor(args) | Argument::Sequence(args) | Argument::Function{args, ..} =>
+				Argument::Add{lhs, rhs} | Argument::Subtract{lhs, rhs} | Argument::Multiply{lhs, rhs} | Argument::Divide{lhs, rhs}
+					| Argument::Modulo{lhs, rhs} | Argument::BitAnd{lhs, rhs} | Argument::BitOr{lhs, rhs} | Argument::BitXor{lhs, rhs}
+					| Argument::LeftShift{lhs, rhs} | Argument::RightShift{lhs, rhs} =>
 				{
-					args.iter_mut().try_fold(Evaluation::Complete, |e, v|
-					{
-						match evaluate(v, ctx)
-						{
-							Ok(r) => Ok(if e == Evaluation::Complete {r} else {e}),
-							Err(e) => Err(e),
-						}
-					})?
+					let r0 = evaluate(lhs, ctx)?;
+					let r1 = evaluate(rhs, ctx)?;
+					if r0 == Evaluation::Complete {r1} else {r0}
 				},
 				Argument::Negate(inner) | Argument::Not(inner) | Argument::Address(inner) => evaluate(inner, ctx)?,
-				Argument::Divide{value, divisor} | Argument::Modulo{value, divisor} =>
-				{
-					let r0 = evaluate(value, ctx)?;
-					let r1 = evaluate(divisor, ctx)?;
-					if r0 == Evaluation::Complete {r1} else {r0}
-				},
-				Argument::LeftShift{value, shift} | Argument::RightShift{value, shift} =>
-				{
-					let r0 = evaluate(value, ctx)?;
-					let r1 = evaluate(shift, ctx)?;
-					if r0 == Evaluation::Complete {r1} else {r0}
-				},
 				_ => unreachable!(),
 			};
 			simplify_raw(arg)?;

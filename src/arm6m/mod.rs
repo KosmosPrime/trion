@@ -862,13 +862,9 @@ fn addr_off<'l>(addr: &Argument<'l>, instr: &'l str, idx: usize) -> Result<(Regi
 		{
 			Ok((regl(name, instr, idx)?, Some(ImmReg::Immediate(0))))
 		},
-		Argument::Add(parts) =>
+		Argument::Add{lhs, rhs} =>
 		{
-			if parts.len() != 2
-			{
-				return Err(InstrErrorKind::ValueRange{instr: instr.to_owned(), idx});
-			}
-			match (&parts[0], &parts[1])
+			match (lhs.as_ref(), rhs.as_ref())
 			{
 				(&Argument::Identifier(addr), &Argument::Identifier(off)) =>
 				{

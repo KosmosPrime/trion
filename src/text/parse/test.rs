@@ -75,16 +75,16 @@ fn internal_address()
 	expect!(Argument::Address(addr) = Some(p.parse_unary()); Argument::Identifier(n) = *addr; {assert_eq!(n, "base");});
 	expect!
 	{
-		Argument::Address(addr) = Some(p.parse_unary()); Argument::Add(ref sum) = *addr;
-		Argument::Identifier(n0) = sum[0]; Argument::Constant(Number::Integer(v1)) = sum[1];
-		{assert_eq!(sum.len(), 2); assert_eq!(n0, "base"); assert_eq!(v1, 0x10);}
+		Argument::Address(addr) = Some(p.parse_unary()); Argument::Add{lhs: ref sum0, rhs: ref sum1} = *addr;
+		Argument::Identifier(n0) = **sum0; Argument::Constant(Number::Integer(v1)) = **sum1;
+		{assert_eq!(n0, "base"); assert_eq!(v1, 0x10);}
 	};
 	expect!
 	{
-		Argument::Address(addr) = Some(p.parse_unary()); Argument::Add(ref sum) = *addr;
-		Argument::Identifier(n0) = sum[0]; Argument::Multiply(ref mul) = sum[1];
-		Argument::Constant(Number::Integer(v1)) = mul[0]; Argument::Identifier(n2) = mul[1];
-		{assert_eq!(sum.len(), 2); assert_eq!(n0, "base"); assert_eq!(mul.len(), 2); assert_eq!(v1, 4); assert_eq!(n2, "offset");}
+		Argument::Address(addr) = Some(p.parse_unary()); Argument::Add{lhs: ref sum0, rhs: ref sum1} = *addr;
+		Argument::Identifier(n0) = **sum0; Argument::Multiply{lhs: ref mul0, rhs: ref mul1} = **sum1;
+		Argument::Constant(Number::Integer(v1)) = **mul0; Argument::Identifier(n2) = **mul1;
+		{assert_eq!(n0, "base"); assert_eq!(v1, 4); assert_eq!(n2, "offset");}
 	};
 	assert!(p.next().is_none());
 }
@@ -113,10 +113,11 @@ fn internal_sequence()
 		Argument::Identifier(n1) = items[1];
 		Argument::Address(ref a2) = items[2]; Argument::Identifier(n21) = **a2;
 		Argument::Sequence(ref s3) = items[3];
-		Argument::Add(ref e4) = items[4]; Argument::Constant(Number::Integer(v40)) = e4[0]; Argument::Constant(Number::Integer(v41)) = e4[1];
+		Argument::Add{lhs: ref sum40, rhs: ref sum41} = items[4];
+			Argument::Constant(Number::Integer(v40)) = **sum40; Argument::Constant(Number::Integer(v41)) = **sum41;
 		{
 			assert_eq!(items.len(), 5); assert_eq!(v0, 0); assert_eq!(n1, "ident"); assert_eq!(n21, "r0");
-			assert_eq!(s3.len(), 0); assert_eq!(e4.len(), 2); assert_eq!(v40, 2); assert_eq!(v41, 3);
+			assert_eq!(s3.len(), 0); assert_eq!(v40, 2); assert_eq!(v41, 3);
 		}
 	};
 	assert!(p.next().is_none());
