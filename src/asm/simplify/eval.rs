@@ -1,4 +1,5 @@
 use core::fmt;
+use core::ops::BitOr;
 use std::error::Error;
 
 use crate::asm::Context;
@@ -11,7 +12,7 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 {
 	match arg
 	{
-		Argument::Constant(..) => Ok(Evaluation::Complete),
+		Argument::Constant(..) => Ok(Evaluation::Complete{changed: false}),
 		Argument::Identifier(name) =>
 		{
 			if !ctx.get_instruction_set().is_register(name)
@@ -20,17 +21,17 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 				return match ctx.get_constant(name, realm)
 				{
 					Lookup::NotFound => Err(EvalError::NoSuchVariable{name: name.to_owned(), realm: Realm::Local}),
-					Lookup::Deferred => Ok(Evaluation::Deferred),
+					Lookup::Deferred => Ok(Evaluation::Deferred{changed: false}),
 					Lookup::Found(val) =>
 					{
 						*arg = Argument::Constant(Number::Integer(val));
-						Ok(Evaluation::Complete)
+						Ok(Evaluation::Complete{changed: true})
 					},
 				};
 			}
-			else {Ok(Evaluation::Complete)}
+			else {Ok(Evaluation::Complete{changed: false})}
 		},
-		Argument::String(..) => Ok(Evaluation::Complete),
+		Argument::String(..) => Ok(Evaluation::Complete{changed: false}),
 		_ =>
 		{
 			let eval = match arg
@@ -39,15 +40,12 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 					| Argument::Modulo{lhs, rhs} | Argument::BitAnd{lhs, rhs} | Argument::BitOr{lhs, rhs} | Argument::BitXor{lhs, rhs}
 					| Argument::LeftShift{lhs, rhs} | Argument::RightShift{lhs, rhs} =>
 				{
-					let r0 = evaluate(lhs, ctx)?;
-					let r1 = evaluate(rhs, ctx)?;
-					if r0 == Evaluation::Complete {r1} else {r0}
+					evaluate(lhs, ctx)? | evaluate(rhs, ctx)?
 				},
 				Argument::Negate(inner) | Argument::Not(inner) | Argument::Address(inner) => evaluate(inner, ctx)?,
 				_ => unreachable!(),
 			};
-			simplify_raw(arg)?;
-			Ok(eval)
+			Ok(eval | Evaluation::Complete{changed: simplify_raw(arg)?})
 		},
 	}
 }
@@ -55,7 +53,40 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Evaluation
 {
-	Complete, Deferred,
+	Complete{changed: bool},
+	Deferred{changed: bool},
+}
+
+impl Evaluation
+{
+	pub fn is_changed(&self) -> bool
+	{
+		match *self
+		{
+			Self::Complete{changed} => changed,
+			Self::Deferred{changed} => changed,
+		}
+	}
+}
+
+impl BitOr for Evaluation
+{
+	type Output = Self;
+	
+	fn bitor(self, rhs: Self) -> Self::Output
+	{
+		let (ch_lhs, def_lhs) = match self
+		{
+			Self::Complete{changed} => (changed, false),
+			Self::Deferred{changed} => (changed, true),
+		};
+		let (ch_rhs, def_rhs) = match rhs
+		{
+			Self::Complete{changed} => (changed, false),
+			Self::Deferred{changed} => (changed, true),
+		};
+		if def_lhs || def_rhs {Self::Deferred{changed: ch_lhs | ch_rhs}} else {Self::Complete{changed: ch_lhs | ch_rhs}}
+	}
 }
 
 #[derive(Clone, Debug)]

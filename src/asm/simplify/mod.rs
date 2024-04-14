@@ -47,8 +47,10 @@ impl fmt::Display for OverflowError
 
 impl Error for OverflowError {}
 
-pub fn neutralize_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
+pub fn neutralize_raw<'l>(arg: &mut Argument<'l>) -> Result<bool, SimplifyError>
 {
+	let mut changed = false;
+	
 	// optimize out adding or subtracting a negative by flipping the binary operator
 	while matches!(arg, Argument::Add{rhs, ..} | Argument::Subtract{rhs, ..} if matches!(**rhs, Argument::Negate(..)))
 	{
@@ -58,11 +60,13 @@ pub fn neutralize_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 			{
 				let Argument::Negate(neg) = *rhs else {unreachable!()};
 				*arg = Argument::Subtract{lhs, rhs: neg};
+				changed = true;
 			},
 			Argument::Subtract{lhs, rhs} =>
 			{
 				let Argument::Negate(neg) = *rhs else {unreachable!()};
 				*arg = Argument::Add{lhs, rhs: neg};
+				changed = true;
 			},
 			_ => unreachable!(),
 		}
@@ -86,6 +90,7 @@ pub fn neutralize_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 					Argument::Subtract{lhs, rhs} => Argument::Add{lhs, rhs},
 					_ => unreachable!(),
 				};
+				changed = true;
 			}
 		}
 	}
@@ -144,31 +149,31 @@ pub fn neutralize_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 		},
 		_ => (),
 	}
-	Ok(())
+	
+	Ok(changed)
 }
 
-pub fn neutralize<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
+pub fn neutralize<'l>(arg: &mut Argument<'l>) -> Result<bool, SimplifyError>
 {
-	match arg
+	Ok(match arg
 	{
 		Argument::Add{lhs, rhs} | Argument::Subtract{lhs, rhs} | Argument::Multiply{lhs, rhs} | Argument::Divide{lhs, rhs}
 			| Argument::Modulo{lhs, rhs} | Argument::BitAnd{lhs, rhs} | Argument::BitOr{lhs, rhs} | Argument::BitXor{lhs, rhs}
 			| Argument::LeftShift{lhs, rhs} | Argument::RightShift{lhs, rhs} =>
 		{
-			neutralize(lhs.as_mut())?;
-			neutralize(rhs.as_mut())?;
+			// don't short-circuit, fully neutralize both
+			neutralize(lhs.as_mut())? | neutralize(rhs.as_mut())?
 		},
 		Argument::Negate(value) | Argument::Not(value) | Argument::Address(value) => neutralize(value)?,
-		Argument::Sequence(args) | Argument::Function{args, ..} => return args.iter_mut().try_for_each(neutralize),
-		_ => (),
-	}
-	neutralize_raw(arg)
+		Argument::Sequence(args) | Argument::Function{args, ..} => return args.iter_mut().try_fold(false, |c, a| Ok(c | neutralize(a)?)),
+		_ => false,
+	} | neutralize_raw(arg)?)
 }
 
-fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
+fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<bool, SimplifyError>
 {
 	let arg_ty = arg.get_type();
-	match arg
+	Ok(match arg
 	{
 		Argument::Add{lhs, rhs} | Argument::Subtract{lhs, rhs} | Argument::Multiply{lhs, rhs} | Argument::Divide{lhs, rhs}
 			| Argument::Modulo{lhs, rhs} | Argument::BitAnd{lhs, rhs} | Argument::BitOr{lhs, rhs} | Argument::BitXor{lhs, rhs}
@@ -224,6 +229,7 @@ fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 					_ => unreachable!(),
 				}?;
 				*arg = Argument::Constant(Number::Integer(result));
+				true
 			}
 			else if arg_ty == ArgumentType::Modulo
 			{
@@ -245,11 +251,12 @@ fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 					else {false}
 				}
 				else {false};
-				if !changed {neutralize_raw(arg)?;}
+				// intentional short-circuit because we don't need to neutralize `arg` if we've just rewritten it
+				changed || neutralize_raw(arg)?
 			}
 			else if matches!(arg_ty, ArgumentType::LeftShift | ArgumentType::RightShift)
 			{
-				neutralize_raw(arg)?;
+				neutralize_raw(arg)?
 			}
 			else
 			{
@@ -435,6 +442,7 @@ fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 						}
 						// deep neutralization because we've changed `lhs` and `rhs` so up to `arg` may be subject to neutralization again
 						neutralize(arg)?;
+						true
 					},
 					_ => neutralize_raw(arg)?, // nothing to do but check neutralization
 				}
@@ -448,6 +456,7 @@ fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 				{
 					let Argument::Subtract{lhs, rhs} = mem::replace(value.as_mut(), Argument::Constant(Number::Integer(0))) else {unreachable!()};
 					*arg = Argument::Subtract{lhs: rhs, rhs: lhs};
+					true
 				},
 				&Argument::Constant(Number::Integer(value)) =>
 				{
@@ -456,24 +465,29 @@ fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 						return Err(SimplifyError::Overflow(OverflowError::Negate));
 					}
 					*arg = Argument::Constant(Number::Integer(-value));
+					true
 				},
 				Argument::String(..) | Argument::Address(..) | Argument::Sequence(..) =>
 				{
 					return Err(SimplifyError::BadType{kind: value.get_type(), op: arg_ty});
 				},
-				_ => (),
+				_ => false,
 			}
 		},
 		Argument::Not(value) =>
 		{
 			match value.as_ref()
 			{
-				&Argument::Constant(Number::Integer(value)) => *arg = Argument::Constant(Number::Integer(!value)),
+				&Argument::Constant(Number::Integer(value)) =>
+				{
+					*arg = Argument::Constant(Number::Integer(!value));
+					true
+				},
 				Argument::String(..) | Argument::Address(..) | Argument::Sequence(..) =>
 				{
 					return Err(SimplifyError::BadType{kind: value.get_type(), op: arg_ty});
 				},
-				_ => (),
+				_ => false,
 			}
 		},
 		Argument::Address(addr) =>
@@ -482,28 +496,27 @@ fn simplify_raw<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
 			{
 				return Err(SimplifyError::BadType{kind: addr.get_type(), op: arg_ty});
 			}
+			false
 		},
-		_ => (),
-	}
-	Ok(())
+		_ => false,
+	})
 }
 
-pub fn simplify<'l>(arg: &mut Argument<'l>) -> Result<(), SimplifyError>
+pub fn simplify<'l>(arg: &mut Argument<'l>) -> Result<bool, SimplifyError>
 {
-	match arg
+	Ok(match arg
 	{
 		Argument::Add{lhs, rhs} | Argument::Subtract{lhs, rhs} | Argument::Multiply{lhs, rhs} | Argument::Divide{lhs, rhs}
 			| Argument::Modulo{lhs, rhs} | Argument::BitAnd{lhs, rhs} | Argument::BitOr{lhs, rhs} | Argument::BitXor{lhs, rhs}
 			| Argument::LeftShift{lhs, rhs} | Argument::RightShift{lhs, rhs} =>
 		{
-			simplify(lhs)?;
-			simplify(rhs)?;
+			// don't short-circuit, fully neutralize both
+			simplify(lhs)? | simplify(rhs)?
 		},
 		Argument::Negate(value) | Argument::Not(value) | Argument::Address(value) => simplify(value)?,
-		Argument::Sequence(args) | Argument::Function{args, ..} => return args.iter_mut().try_for_each(simplify),
-		_ => (),
-	}
-	simplify_raw(arg)
+		Argument::Sequence(args) | Argument::Function{args, ..} => return args.iter_mut().try_fold(false, |c, a| Ok(c | simplify(a)?)),
+		_ => false,
+	} | simplify_raw(arg)?)
 }
 
 #[derive(Clone, Debug)]
