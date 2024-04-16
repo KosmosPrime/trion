@@ -9,7 +9,7 @@ pub trait InstructionSet
 {
 	fn is_register(&self, name: &str) -> bool;
 	
-	fn assemble<'c>(&self, ctx: &'c mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>;
+	fn assemble(&self, ctx: &mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>;
 }
 
 pub type InstructionError = Positioned<InstrErrorKind>;

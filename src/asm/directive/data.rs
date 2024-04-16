@@ -26,7 +26,7 @@ macro_rules!generate_expr
 				$label
 			}
 			
-			fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
+			fn apply(&self, ctx: & mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 			{
 				fn write($value: $type) -> [u8; $size] {$($write)+}
 				
@@ -182,7 +182,7 @@ macro_rules!generate
 				$label
 			}
 			
-			fn apply<'c>(&$self, $ctx: &'c mut Context, $args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
+			fn apply(&$self, $ctx: &mut Context, $args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 			{
 				let Some($active) = $ctx.active_mut()
 				else

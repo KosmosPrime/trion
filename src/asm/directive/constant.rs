@@ -18,7 +18,7 @@ impl Directive for Const
 		"const"
 	}
 	
-	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
+	fn apply(&self, ctx: & mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 	{
 		if args.value.len() != 2
 		{

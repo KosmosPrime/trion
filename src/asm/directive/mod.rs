@@ -70,7 +70,7 @@ pub trait Directive: fmt::Debug
 {
 	fn get_name(&self) -> &str;
 	
-	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>;
+	fn apply(&self, ctx: & mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>;
 }
 
 pub type DirectiveError = Positioned<DirectiveErrorKind>;

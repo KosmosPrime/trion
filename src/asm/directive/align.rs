@@ -17,7 +17,7 @@ impl Directive for Align
 		"align"
 	}
 	
-	fn apply<'c>(&self, ctx: &'c mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
+	fn apply(&self, ctx: & mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
 	{
 		let Some(active) = ctx.active_mut()
 		else

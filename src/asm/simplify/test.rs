@@ -346,7 +346,7 @@ impl InstructionSet for FakeIsa
 		name.len() >= 2 && name.as_bytes()[0].to_ascii_lowercase() == b'r' && name.as_bytes()[1..].iter().all(|b| b.is_ascii_digit())
 	}
 	
-	fn assemble<'c>(&self, _: &'c mut Context, _: u32, _: u32, _: &str, _: Vec<Argument>) -> Result<(), ErrorLevel>
+	fn assemble(&self, _: &mut Context, _: u32, _: u32, _: &str, _: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
 		panic!() // assembling not supported
 	}

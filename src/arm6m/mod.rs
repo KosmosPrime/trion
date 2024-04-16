@@ -46,7 +46,7 @@ impl InstructionSet for Arm6M
 		else {false}
 	}
 	
-	fn assemble<'c>(&self, ctx: &'c mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
+	fn assemble(&self, ctx: &mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
 		let mut arg_pos = 0;
 		macro_rules!convert

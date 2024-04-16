@@ -330,7 +330,7 @@ impl<'l> Context<'l>
 		Ok(())
 	}
 	
-	pub fn assemble<'s>(&'s mut self, data: &[u8], path: PathBuf) -> (Result<(), ErrorLevel>, PathBuf)
+	pub fn assemble(&mut self, data: &[u8], path: PathBuf) -> (Result<(), ErrorLevel>, PathBuf)
 	{
 		self.path_stack.push(path);
 		let count = NonZeroUsize::try_from(self.path_stack.len()).unwrap();
@@ -362,7 +362,7 @@ impl<'l> Context<'l>
 		(result, frame.into_inner())
 	}
 	
-	pub fn assemble_instr<'s>(&'s mut self, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
+	pub fn assemble_instr(&mut self, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
 		self.instructions.assemble(self, line, col, name, args)
 	}
