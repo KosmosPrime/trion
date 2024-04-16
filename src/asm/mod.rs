@@ -291,12 +291,12 @@ impl<'l> Context<'l>
 			{
 				ElementValue::Directive{name, args} =>
 				{
-					if let Err(e) = self.directives.process(self, Positioned{line: element.line, col: element.col, value: (name, args.as_slice())})
+					if let Err(e) = self.directives.process(self, Positioned{line: element.line, col: element.col, value: (name.as_ref(), args.as_slice())})
 					{
 						return Err(e);
 					}
 				},
-				ElementValue::Label(name) =>
+				ElementValue::Label(ref name) =>
 				{
 					let curr_addr = match self.active()
 					{
@@ -307,7 +307,7 @@ impl<'l> Context<'l>
 						},
 						Some(seg) => seg.curr_addr(),
 					};
-					if let Err(e) = self.insert_constant(name, i64::from(curr_addr), Realm::Local)
+					if let Err(e) = self.insert_constant(name.as_ref(), i64::from(curr_addr), Realm::Local)
 					{
 						self.push_error(element.convert(e));
 						return Err(ErrorLevel::Fatal);
@@ -320,7 +320,7 @@ impl<'l> Context<'l>
 						self.push_error(Positioned{line: element.line, col: element.line, value: AsmErrorKind::Inactive});
 						return Err(ErrorLevel::Fatal);
 					}
-					if let Err(e) = self.assemble_instr(element.line, element.col, name, args)
+					if let Err(e) = self.assemble_instr(element.line, element.col, name.as_ref(), args)
 					{
 						return Err(e);
 					}

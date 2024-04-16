@@ -16,7 +16,7 @@ mod test;
 pub enum Argument<'l>
 {
 	Constant(Number),
-	Identifier(&'l str),
+	Identifier(Cow<'l, str>),
 	String(Cow<'l, str>),
 	Add{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
 	Negate(Box<Argument<'l>>),
@@ -32,7 +32,7 @@ pub enum Argument<'l>
 	RightShift{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
 	Address(Box<Argument<'l>>),
 	Sequence(Vec<Argument<'l>>),
-	Function{name: &'l str, args: Vec<Argument<'l>>},
+	Function{name: Cow<'l, str>, args: Vec<Argument<'l>>},
 }
 
 impl<'l> Argument<'l>
@@ -59,6 +59,61 @@ impl<'l> Argument<'l>
 			Self::Address(..) => ArgumentType::Address,
 			Self::Sequence(..) => ArgumentType::Sequence,
 			Self::Function{..} => ArgumentType::Function,
+		}
+	}
+	
+	pub fn vec_into_owned(args: Vec<Self>) -> Vec<Argument<'static>>
+	{
+		let mut owned_args = Vec::new();
+		for arg in args
+		{
+			owned_args.push(arg.into_owned());
+		}
+		owned_args
+	}
+	
+	pub fn into_owned(self) -> Argument<'static>
+	{
+		let arg_ty = self.get_type();
+		match self
+		{
+			Self::Constant(n) => Argument::Constant(n),
+			Self::Identifier(ident) => Argument::Identifier(Cow::Owned(ident.into_owned())),
+			Self::String(value) => Argument::String(Cow::Owned(value.into_owned())),
+			Self::Add{lhs, rhs} | Self::Subtract{lhs, rhs} | Self::Multiply{lhs, rhs} | Self::Divide{lhs, rhs}
+				| Self::Modulo{lhs, rhs} | Self::BitAnd{lhs, rhs} | Self::BitOr{lhs, rhs} | Self::BitXor{lhs, rhs}
+				| Self::LeftShift{lhs, rhs} | Self::RightShift{lhs, rhs} =>
+			{
+				let lhs = Box::new(lhs.into_owned());
+				let rhs = Box::new(rhs.into_owned());
+				match arg_ty
+				{
+					ArgumentType::Add => Argument::Add{lhs, rhs},
+					ArgumentType::Subtract => Argument::Subtract{lhs, rhs},
+					ArgumentType::Multiply => Argument::Multiply{lhs, rhs},
+					ArgumentType::Divide => Argument::Divide{lhs, rhs},
+					ArgumentType::Modulo => Argument::Modulo{lhs, rhs},
+					ArgumentType::BitAnd => Argument::BitAnd{lhs, rhs},
+					ArgumentType::BitOr => Argument::BitOr{lhs, rhs},
+					ArgumentType::BitXor => Argument::BitXor{lhs, rhs},
+					ArgumentType::LeftShift => Argument::LeftShift{lhs, rhs},
+					ArgumentType::RightShift => Argument::RightShift{lhs, rhs},
+					_ => unreachable!(),
+				}
+			},
+			Self::Negate(value) | Self::Not(value) | Self::Address(value) =>
+			{
+				let value = Box::new(value.into_owned());
+				match arg_ty
+				{
+					ArgumentType::Negate => Argument::Negate(value),
+					ArgumentType::Not => Argument::Not(value),
+					ArgumentType::Address => Argument::Address(value),
+					_ => unreachable!(),
+				}
+			},
+			Self::Sequence(args) => Argument::Sequence(Self::vec_into_owned(args)),
+			Self::Function{name, args} => Argument::Function{name: Cow::Owned(name.into_owned()), args: Self::vec_into_owned(args)},
 		}
 	}
 }
@@ -105,9 +160,22 @@ pub type Element<'l> = Positioned<ElementValue<'l>>;
 #[derive(Clone, Debug)]
 pub enum ElementValue<'l>
 {
-	Label(&'l str),
-	Directive{name: &'l str, args: Vec<Argument<'l>>},
-	Instruction{name: &'l str, args: Vec<Argument<'l>>},
+	Label(Cow<'l, str>),
+	Directive{name: Cow<'l, str>, args: Vec<Argument<'l>>},
+	Instruction{name: Cow<'l, str>, args: Vec<Argument<'l>>},
+}
+
+impl<'l> ElementValue<'l>
+{
+	pub fn into_owned(self) -> ElementValue<'static>
+	{
+		match self
+		{
+			Self::Label(name) => ElementValue::Label(Cow::Owned(name.into_owned())),
+			Self::Directive{name, args} => ElementValue::Directive{name: Cow::Owned(name.into_owned()), args: Argument::vec_into_owned(args)},
+			Self::Instruction{name, args} => ElementValue::Instruction{name: Cow::Owned(name.into_owned()), args: Argument::vec_into_owned(args)},
+		}
+	}
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +226,7 @@ impl<'l> Parser<'l>
 					Ok(args) =>
 					{
 						self.next_inner("';'")?;
-						Ok(Element{line, col, value: ElementValue::Directive{name, args}})
+						Ok(Element{line, col, value: ElementValue::Directive{name: Cow::Borrowed(name), args}})
 					},
 					Err(e) => Err(e),
 				}
@@ -172,7 +240,7 @@ impl<'l> Parser<'l>
 						if matches!(t.value, TokenValue::LabelMark)
 						{
 							drop(self.0.next());
-							return Ok(Element{value: ElementValue::Label(name), line, col});
+							return Ok(Element{value: ElementValue::Label(Cow::Borrowed(name)), line, col});
 						}
 					},
 					Some(Err(..)) => return Err(Positioned{line, col, value: ParseErrorKind::Token(self.0.next().unwrap().unwrap_err())}),
@@ -183,7 +251,7 @@ impl<'l> Parser<'l>
 					Ok(args) =>
 					{
 						self.next_inner("';'")?;
-						Ok(Element{line, col, value: ElementValue::Instruction{name, args}})
+						Ok(Element{line, col, value: ElementValue::Instruction{name: Cow::Borrowed(name), args}})
 					},
 					Err(e) => Err(e),
 				}
@@ -222,9 +290,9 @@ impl<'l> Parser<'l>
 					{
 						return Err(Self::expect("')'", &end));
 					}
-					Ok(Argument::Function{name: ident, args})
+					Ok(Argument::Function{name: Cow::Borrowed(ident), args})
 				}
-				else {Ok(Argument::Identifier(ident))}
+				else {Ok(Argument::Identifier(Cow::Borrowed(ident)))}
 			},
 			TokenValue::String(val) => Ok(Argument::String(val)),
 			TokenValue::BeginGroup =>

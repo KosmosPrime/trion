@@ -113,15 +113,15 @@ macro_rules!generate_expr
 				let value = match args.value[0]
 				{
 					Argument::Constant(Number::Integer(v)) => v,
-					Argument::Identifier(name) =>
+					Argument::Identifier(ref name) =>
 					{
-						match ctx.get_constant(name, Realm::Local)
+						match ctx.get_constant(name.as_ref(), Realm::Local)
 						{
 							Lookup::Found(v) => v,
 							_ =>
 							{
 								let addr = args.convert(ctx.curr_addr().unwrap()).with_name(ctx.curr_path().unwrap().to_string_lossy().into_owned());
-								let name = name.to_owned();
+								let name = name.as_ref().to_owned();
 								if let Err(e) = ctx.active_mut().unwrap().write(&[0; $size])
 								{
 									let source = Box::new(DataError::Write(e));

@@ -20,7 +20,7 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 				let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
 				return match ctx.get_constant(name, realm)
 				{
-					Lookup::NotFound => Err(EvalError::NoSuchVariable{name: name.to_owned(), realm: Realm::Local}),
+					Lookup::NotFound => Err(EvalError::NoSuchVariable{name: name.as_ref().to_owned(), realm: Realm::Local}),
 					Lookup::Deferred => Ok(Evaluation::Deferred{changed: false}),
 					Lookup::Found(val) =>
 					{

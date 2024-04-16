@@ -59,8 +59,8 @@ fn internal_func()
 	expect!
 	{
 		Argument::Function{name, args} = Some(p.parse_unary());
-		Argument::Identifier(n0) = args[0];
-		Argument::Identifier(n1) = args[1]; 
+		Argument::Identifier(ref n0) = args[0];
+		Argument::Identifier(ref n1) = args[1]; 
 		Argument::Negate(ref v2) = args[2]; Argument::Constant(Number::Integer(v2)) = **v2;
 		{assert_eq!(name, "plot"); assert_eq!(args.len(), 3); assert_eq!(n0, "x"); assert_eq!(n1, "y"); assert_eq!(v2, 1);}
 	};
@@ -76,14 +76,14 @@ fn internal_address()
 	expect!
 	{
 		Argument::Address(addr) = Some(p.parse_unary()); Argument::Add{lhs: ref sum0, rhs: ref sum1} = *addr;
-		Argument::Identifier(n0) = **sum0; Argument::Constant(Number::Integer(v1)) = **sum1;
+		Argument::Identifier(ref n0) = **sum0; Argument::Constant(Number::Integer(v1)) = **sum1;
 		{assert_eq!(n0, "base"); assert_eq!(v1, 0x10);}
 	};
 	expect!
 	{
 		Argument::Address(addr) = Some(p.parse_unary()); Argument::Add{lhs: ref sum0, rhs: ref sum1} = *addr;
-		Argument::Identifier(n0) = **sum0; Argument::Multiply{lhs: ref mul0, rhs: ref mul1} = **sum1;
-		Argument::Constant(Number::Integer(v1)) = **mul0; Argument::Identifier(n2) = **mul1;
+		Argument::Identifier(ref n0) = **sum0; Argument::Multiply{lhs: ref mul0, rhs: ref mul1} = **sum1;
+		Argument::Constant(Number::Integer(v1)) = **mul0; Argument::Identifier(ref n2) = **mul1;
 		{assert_eq!(n0, "base"); assert_eq!(v1, 4); assert_eq!(n2, "offset");}
 	};
 	assert!(p.next().is_none());
@@ -103,15 +103,15 @@ fn internal_sequence()
 	expect!
 	{
 		Argument::Sequence(items) = Some(p.parse_unary());
-		Argument::Identifier(n0) = items[0]; Argument::Identifier(n1) = items[1]; Argument::Identifier(n2) = items[2];
+		Argument::Identifier(ref n0) = items[0]; Argument::Identifier(ref n1) = items[1]; Argument::Identifier(ref n2) = items[2];
 		{assert_eq!(items.len(), 3); assert_eq!(n0, "r0"); assert_eq!(n1, "r1"); assert_eq!(n2, "r2");}
 	};
 	expect!
 	{
 		Argument::Sequence(items) = Some(p.parse_unary());
 		Argument::Constant(Number::Integer(v0)) = items[0];
-		Argument::Identifier(n1) = items[1];
-		Argument::Address(ref a2) = items[2]; Argument::Identifier(n21) = **a2;
+		Argument::Identifier(ref n1) = items[1];
+		Argument::Address(ref a2) = items[2]; Argument::Identifier(n21) = a2.as_ref();
 		Argument::Sequence(ref s3) = items[3];
 		Argument::Add{lhs: ref sum40, rhs: ref sum41} = items[4];
 			Argument::Constant(Number::Integer(v40)) = **sum40; Argument::Constant(Number::Integer(v41)) = **sum41;
@@ -131,18 +131,18 @@ fn assembly()
 	expect!
 	{
 		Positioned{line: 2, col: 2, value: ElementValue::Instruction{name, args}} = p.next();
-		Argument::Identifier(n0) = args[0]; Argument::Constant(Number::Integer(v1)) = args[1];
+		Argument::Identifier(ref n0) = args[0]; Argument::Constant(Number::Integer(v1)) = args[1];
 		{assert_eq!(name, "mov"); assert_eq!(args.len(), 2); assert_eq!(n0, "r8d"); assert_eq!(v1, 10);}
 	};
 	expect!(Positioned{line: 3, col: 2, value: ElementValue::Label(l)} = p.next(); {assert_eq!(l, "loop");});
 	expect!
 	{
-		Positioned{line: 4, col: 3, value: ElementValue::Instruction{name, args}} = p.next(); Argument::Identifier(n0) = args[0];
+		Positioned{line: 4, col: 3, value: ElementValue::Instruction{name, args}} = p.next(); Argument::Identifier(ref n0) = args[0];
 		{assert_eq!(name, "dec"); assert_eq!(args.len(), 1); assert_eq!(n0, "r8d");}
 	};
 	expect!
 	{
-		Positioned{line: 5, col: 3, value: ElementValue::Instruction{name, args}} = p.next(); Argument::Identifier(n0) = args[0];
+		Positioned{line: 5, col: 3, value: ElementValue::Instruction{name, args}} = p.next(); Argument::Identifier(ref n0) = args[0];
 		{assert_eq!(name, "jnz"); assert_eq!(args.len(), 1); assert_eq!(n0, "loop");}
 	};
 	expect!(Positioned{line: 6, col: 1, value: ElementValue::Instruction{name, args}} = p.next(); {assert_eq!(name, "hcf"); assert_eq!(args.len(), 0);});

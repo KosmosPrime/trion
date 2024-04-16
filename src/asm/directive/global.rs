@@ -34,7 +34,7 @@ impl Directive for Global
 		}
 		let name = match args.value[0]
 		{
-			Argument::Identifier(n) => n,
+			Argument::Identifier(ref n) => n.as_ref(),
 			ref arg =>
 			{
 				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::String, have: arg.get_type()}));

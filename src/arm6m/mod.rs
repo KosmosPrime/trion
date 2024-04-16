@@ -105,10 +105,10 @@ impl InstructionSet for Arm6M
 			{
 				match args[arg_pos]
 				{
-					Argument::Identifier(ident) =>
+					Argument::Identifier(ref ident) =>
 					{
 						arg_pos += 1;
-						ident
+						ident.as_ref()
 					},
 					ref arg =>
 					{
@@ -122,9 +122,9 @@ impl InstructionSet for Arm6M
 			{
 				match args[arg_pos]
 				{
-					Argument::Identifier(ident) =>
+					Argument::Identifier(ref ident) =>
 					{
-						let reg = match regl(ident, name, arg_pos + 1)
+						let reg = match regl(ident.as_ref(), name, arg_pos + 1)
 						{
 							Ok(r) => r,
 							Err(e) =>
@@ -148,9 +148,9 @@ impl InstructionSet for Arm6M
 			{
 				match args[arg_pos]
 				{
-					Argument::Identifier(ident) =>
+					Argument::Identifier(ref ident) =>
 					{
-						let reg = match sysl(ident, name, arg_pos + 1)
+						let reg = match sysl(ident.as_ref(), name, arg_pos + 1)
 						{
 							Ok(r) => r,
 							Err(e) =>
@@ -186,9 +186,9 @@ impl InstructionSet for Arm6M
 						arg_pos += 1;
 						ImmReg::Immediate(val)
 					},
-					Argument::Identifier(ident) =>
+					Argument::Identifier(ref ident) =>
 					{
-						let reg = match regl(ident, name, arg_pos + 1)
+						let reg = match regl(ident.as_ref(), name, arg_pos + 1)
 						{
 							Ok(r) => r,
 							Err(e) =>
@@ -279,10 +279,10 @@ impl InstructionSet for Arm6M
 						arg_pos += 1;
 						AddrLabel::Address(addr, off)
 					},
-					Argument::Identifier(ident) =>
+					Argument::Identifier(ref ident) =>
 					{
 						arg_pos += 1;
-						AddrLabel::Label(ident)
+						AddrLabel::Label(ident.as_ref())
 					},
 					ref arg =>
 					{
@@ -858,27 +858,27 @@ fn addr_off<'l>(addr: &Argument<'l>, instr: &'l str, idx: usize) -> Result<(Regi
 {
 	match addr
 	{
-		&Argument::Identifier(name) =>
+		Argument::Identifier(name) =>
 		{
-			Ok((regl(name, instr, idx)?, Some(ImmReg::Immediate(0))))
+			Ok((regl(name.as_ref(), instr, idx)?, Some(ImmReg::Immediate(0))))
 		},
 		Argument::Add{lhs, rhs} =>
 		{
 			match (lhs.as_ref(), rhs.as_ref())
 			{
-				(&Argument::Identifier(addr), &Argument::Identifier(off)) =>
+				(Argument::Identifier(addr), Argument::Identifier(off)) =>
 				{
-					Ok((regl(addr, instr, idx)?, Some(ImmReg::Register(regl(off, instr, idx)?))))
+					Ok((regl(addr.as_ref(), instr, idx)?, Some(ImmReg::Register(regl(off.as_ref(), instr, idx)?))))
 				},
-				(&Argument::Identifier(addr), &Argument::Constant(Number::Integer(off))) |
-					(&Argument::Constant(Number::Integer(off)), &Argument::Identifier(addr)) =>
+				(Argument::Identifier(addr), &Argument::Constant(Number::Integer(off))) |
+					(&Argument::Constant(Number::Integer(off)), Argument::Identifier(addr)) =>
 				{
 					let Ok(off) = i32::try_from(off)
 					else
 					{
 						return Err(InstrErrorKind::ValueRange{instr: instr.to_owned(), idx});
 					};
-					Ok((regl(addr, instr, idx)?, Some(ImmReg::Immediate(off))))
+					Ok((regl(addr.as_ref(), instr, idx)?, Some(ImmReg::Immediate(off))))
 				},
 				_ => return Err(InstrErrorKind::ValueRange{instr: instr.to_owned(), idx}),
 			}
