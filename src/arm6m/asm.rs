@@ -95,6 +95,93 @@ impl Instruction
 		InstrAt{instr: *self, addr}
 	}
 	
+	pub fn get_name(&self) -> &'static str
+	{
+		match self
+		{
+			Instruction::Adc{..} => "ADCS",
+			Instruction::Add{flags, ..} => if *flags {"ADDS"} else {"ADD"},
+			Instruction::Adr{..} => "ADR",
+			Instruction::And{..} => "ANDS",
+			Instruction::Asr{..} => "ASRS",
+			Instruction::B{cond, ..} =>
+			{
+				match cond
+				{
+					Condition::Equal => "BEQ",
+					Condition::NonEqual => "BNE",
+					//Condition::CarrySet => "BCS",
+					Condition::CarrySet => "BHS",
+					//Condition::CarryClear => "BCC",
+					Condition::CarryClear => "BLO",
+					Condition::Minus => "BMI",
+					Condition::Plus => "BPL",
+					Condition::Overflow => "BVS",
+					Condition::NoOverflow => "BVC",
+					Condition::Higher => "BHI",
+					Condition::LowerEqual => "BLS",
+					Condition::GreaterEqual => "BGE",
+					Condition::Less => "BLT",
+					Condition::Greater => "BGT",
+					Condition::LessEqual => "BLE",
+					Condition::Always => "B",
+				}
+			},
+			Instruction::Bic{..} => "BIC",
+			Instruction::Bkpt{..} => "BKPT",
+			Instruction::Bl{..} => "BL",
+			Instruction::Blx{..} => "BLX",
+			Instruction::Bx{..} => "BX",
+			Instruction::Cmn{..} => "CMN",
+			Instruction::Cmp{..} => "CMP",
+			Instruction::Cps{enable} => if *enable {"CPSIE"} else {"CPSID"},
+			Instruction::Dmb => "DMB",
+			Instruction::Dsb => "DSB",
+			Instruction::Eor{..} => "EORS",
+			Instruction::Isb => "ISB",
+			Instruction::Ldm{..} => "LDM",
+			Instruction::Ldr{..} => "LDR",
+			Instruction::Ldrb{..} => "LDRB",
+			Instruction::Ldrh{..} => "LDRH",
+			Instruction::Ldrsb{..} => "LDRSB",
+			Instruction::Ldrsh{..} => "LDRSH",
+			Instruction::Lsl{..} => "LSLS",
+			Instruction::Lsr{..} => "LSRS",
+			Instruction::Mov{flags, ..} => if *flags {"MOVS"} else {"MOV"},
+			Instruction::Mrs{..} => "MRS",
+			Instruction::Msr{..} => "MSR",
+			Instruction::Mul{..} => "MULS",
+			Instruction::Mvn{..} => "MVNS",
+			Instruction::Nop => "NOP",
+			Instruction::Orr{..} => "ORRS",
+			Instruction::Pop{..} => "POP",
+			Instruction::Push{..} => "PUSH",
+			Instruction::Rev{..} => "REV",
+			Instruction::Rev16{..} => "REV16",
+			Instruction::Revsh{..} => "REVSH",
+			Instruction::Ror{..} => "RORS",
+			Instruction::Rsb{..} => "RSBS",
+			Instruction::Sbc{..} => "SBCS",
+			Instruction::Sev => "SEV",
+			Instruction::Stm{..} => "STM",
+			Instruction::Str{..} => "STR",
+			Instruction::Strb{..} => "STRB",
+			Instruction::Strh{..} => "STRH",
+			Instruction::Sub{flags, ..} => if *flags {"SUBS"} else {"SUB"},
+			Instruction::Svc{..} => "SVC",
+			Instruction::Sxtb{..} => "SXTB",
+			Instruction::Sxth{..} => "SXTH",
+			Instruction::Tst{..} => "TST",
+			Instruction::Udf{..} => "UDF.N",
+			Instruction::Udfw{..} => "UDF.W",
+			Instruction::Uxtb{..} => "UXTB",
+			Instruction::Uxth{..} => "UXTH",
+			Instruction::Wfe => "WFE",
+			Instruction::Wfi => "WFI",
+			Instruction::Yield => "YIELD",
+		}
+	}
+	
 	pub fn get_branch(&self, addr: u32) -> Option<u32>
 	{
 		if (addr & 1) == 0

@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use crate::arm6m::asm::{ImmReg, Instruction};
 use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
@@ -5,8 +7,9 @@ use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
 use crate::asm::{ConstantError, Context, ErrorLevel};
 use crate::asm::constant::{Lookup, Realm};
-use crate::asm::instr::{InstructionSet, InstrErrorKind};
-use crate::text::{Positioned, PosNamed};
+use crate::asm::instr::{InstrErrorKind, InstructionError, InstructionSet};
+use crate::asm::simplify::{evaluate, Evaluation};
+use crate::text::{PosNamed, Positioned};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
 
@@ -15,6 +18,11 @@ pub mod cond;
 pub mod sysreg;
 pub mod reg;
 pub mod regset;
+
+enum AsmOp
+{
+	Completed, Deferred,
+}
 
 enum AddrLabel<'l>
 {
@@ -48,736 +56,888 @@ impl InstructionSet for Arm6M
 	
 	fn assemble(&self, ctx: &mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
+		let addr = ctx.active().unwrap().curr_addr();
+		match ArmInstr::new(line, col, name, addr, args)
+		{
+			Ok(mut instr) =>
+			{
+				match instr.assemble(ctx)
+				{
+					Ok(AsmOp::Completed) => Ok(()),
+					Ok(AsmOp::Deferred) =>
+					{
+						instr.write_instr(ctx, true)?; // padding for whatever follows
+						instr.file_name = Some(ctx.curr_path().unwrap().to_string_lossy().into_owned());
+						instr.into_owned().schedule(ctx, false);
+						Ok(())
+					},
+					Err(e) => Err(e),
+				}
+			},
+			Err(e) =>
+			{
+				ctx.push_error(e);
+				Err(ErrorLevel::Fatal)
+			},
+		}
+	}
+}
+
+struct ArmInstr<'l>
+{
+	file_name: Option<String>,
+	line: u32,
+	col: u32,
+	addr: u32,
+	instr: Instruction,
+	args_done: usize,
+	args: Vec<Argument<'l>>,
+}
+
+impl<'l> ArmInstr<'l>
+{
+	fn new(line: u32, col: u32, name: &str, addr: u32, args: Vec<Argument<'l>>) -> Result<Self, InstructionError>
+	{
+		let mut temp_name = [0u8; 16];
+		let name = if name.len() < temp_name.len()
+		{
+			temp_name[..name.len()].copy_from_slice(name.as_bytes());
+			// SAFETY: we've copied this from a `str`
+			let temp_name = unsafe{core::str::from_utf8_unchecked_mut(&mut temp_name[..name.len()])};
+			temp_name.make_ascii_uppercase();
+			&*temp_name
+		}
+		else {&""};
+		let instr = match name
+		{
+			"ADCS" => Instruction::Adc{dst: Register::R0, rhs: Register::R0},
+			"ADD" | "ADDS" => Instruction::Add{flags: name.len() > 3, dst: Register::R0, lhs: Register::R0, rhs: ImmReg::Immediate(0)},
+			"ADR" => Instruction::Adr{dst: Register::R0, off: 0},
+			"ANDS" => Instruction::And{dst: Register::R0, rhs: Register::R0},
+			"ASRS" => Instruction::Asr{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(0)},
+			"B" => Instruction::B{cond: Condition::Always, off: 0},
+			"BCC" => Instruction::B{cond: Condition::CarryClear, off: 0},
+			"BCS" => Instruction::B{cond: Condition::CarrySet, off: 0},
+			"BEQ" => Instruction::B{cond: Condition::Equal, off: 0},
+			"BGE" => Instruction::B{cond: Condition::GreaterEqual, off: 0},
+			"BGT" => Instruction::B{cond: Condition::Greater, off: 0},
+			"BHI" => Instruction::B{cond: Condition::Higher, off: 0},
+			"BHS" => Instruction::B{cond: Condition::CarrySet, off: 0},
+			"BIC" => Instruction::Bic{dst: Register::R0, rhs: Register::R0},
+			"BKPT" => Instruction::Bkpt{info: 0},
+			"BL" => Instruction::Bl{off: 0},
+			"BLE" => Instruction::B{cond: Condition::LessEqual, off: 0},
+			"BLO" => Instruction::B{cond: Condition::CarryClear, off: 0},
+			"BLS" => Instruction::B{cond: Condition::LowerEqual, off: 0},
+			"BLT" => Instruction::B{cond: Condition::Less, off: 0},
+			"BLX" => Instruction::Blx{off: Register::R0},
+			"BMI" => Instruction::B{cond: Condition::Minus, off: 0},
+			"BNE" => Instruction::B{cond: Condition::NonEqual, off: 0},
+			"BPL" => Instruction::B{cond: Condition::Plus, off: 0},
+			"BVC" => Instruction::B{cond: Condition::NoOverflow, off: 0},
+			"BVS" => Instruction::B{cond: Condition::Overflow, off: 0},
+			"BX" => Instruction::Bx{off: Register::R0},
+			"CMN" => Instruction::Cmn{lhs: Register::R0, rhs: Register::R0},
+			"CMP" => Instruction::Cmp{lhs: Register::R0, rhs: ImmReg::Immediate(0)},
+			"CPSID" => Instruction::Cps{enable: false},
+			"CPSIE" => Instruction::Cps{enable: true},
+			"DMB" => Instruction::Dmb,
+			"DSB" => Instruction::Dsb,
+			"EORS" => Instruction::Eor{dst: Register::R0, rhs: Register::R0},
+			"ISB" => Instruction::Isb,
+			"LDM" => Instruction::Ldm{addr: Register::R0, registers: RegisterSet::new()},
+			"LDR" => Instruction::Ldr{dst: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
+			"LDRB" => Instruction::Ldrb{dst: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
+			"LDRH" => Instruction::Ldrh{dst: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
+			"LDRSB" => Instruction::Ldrsb{dst: Register::R0, addr: Register::R0, off: Register::R0},
+			"LDRSH" => Instruction::Ldrsh{dst: Register::R0, addr: Register::R0, off: Register::R0},
+			"LSLS" => Instruction::Lsl{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(0)},
+			"LSRS" => Instruction::Lsr{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(0)},
+			"MOV" | "MOVS" => Instruction::Mov{flags: name.len() > 3, dst: Register::R0, src: ImmReg::Immediate(0)},
+			"MRS" => Instruction::Mrs{dst: Register::R0, src: SystemReg::XPSR},
+			"MSR" => Instruction::Msr{dst: SystemReg::XPSR, src: Register::R0},
+			"MULS" => Instruction::Mul{dst: Register::R0, rhs: Register::R0},
+			"MVNS" => Instruction::Mvn{dst: Register::R0, value: Register::R0},
+			"NOP" => Instruction::Nop,
+			"ORRS" => Instruction::Orr{dst: Register::R0, rhs: Register::R0},
+			"POP" => Instruction::Pop{registers: RegisterSet::new()},
+			"PUSH" => Instruction::Push{registers: RegisterSet::new()},
+			"REV" => Instruction::Rev{dst: Register::R0, value: Register::R0},
+			"REV16" => Instruction::Rev16{dst: Register::R0, value: Register::R0},
+			"REVSH" => Instruction::Revsh{dst: Register::R0, value: Register::R0},
+			"RORS" => Instruction::Ror{dst: Register::R0, rhs: Register::R0},
+			"RSBS" => Instruction::Rsb{dst: Register::R0, lhs: Register::R0},
+			"SBCS" => Instruction::Sbc{dst: Register::R0, rhs: Register::R0},
+			"SEV" => Instruction::Sev,
+			"STM" => Instruction::Stm{addr: Register::R0, registers: RegisterSet::new()},
+			"STR" => Instruction::Str{src: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
+			"STRB" => Instruction::Strb{src: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
+			"STRH" => Instruction::Strh{src: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
+			"SUB" | "SUBS" => Instruction::Sub{flags: name.len() > 3, dst: Register::R0, lhs: Register::R0, rhs: ImmReg::Immediate(0)},
+			"SVC" => Instruction::Svc{info: 0},
+			"SXTB" => Instruction::Sxtb{dst: Register::R0, value: Register::R0},
+			"SXTH" => Instruction::Sxth{dst: Register::R0, value: Register::R0},
+			"TST" => Instruction::Tst{lhs: Register::R0, rhs: Register::R0},
+			"UDF.N" => Instruction::Udf{info: 0},
+			"UDF.W" => Instruction::Udfw{info: 0},
+			"UXTB" => Instruction::Uxtb{dst: Register::R0, value: Register::R0},
+			"UXTH" => Instruction::Uxth{dst: Register::R0, value: Register::R0},
+			"WFE" => Instruction::Wfe,
+			"WFI" => Instruction::Wfi,
+			"YIELD" => Instruction::Yield,
+			_ => return Err(Positioned{line, col, value: InstrErrorKind::NoSuchInstruction(name.to_owned())}),
+		};
+		Ok(Self{file_name: None, line, col, addr, instr, args_done: 0, args})
+	}
+	
+	fn push_error<E: Error + 'static>(&mut self, ctx: &mut Context, err: E)
+	{
+		let name = self.file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| "<unknown>".to_owned());
+		ctx.push_error_in(PosNamed{name, line: self.line, col: self.col, value: err});
+	}
+	
+	fn into_owned(self) -> ArmInstr<'static>
+	{
+		ArmInstr
+		{
+			file_name: self.file_name,
+			line: self.line,
+			col: self.col,
+			addr: self.addr,
+			instr: self.instr,
+			args_done: self.args_done,
+			args: Argument::vec_into_owned(self.args),
+		}
+	}
+	
+	fn assemble(&mut self, ctx: &mut Context) -> Result<AsmOp, ErrorLevel>
+	{
 		let mut arg_pos = 0;
+		let instr_name = self.instr.get_name();
 		macro_rules!convert
 		{
-			($($data:ident: $which:ident),* {$($result:tt)+}) =>
+			($(($data:tt: $which:ident))*) =>
 			{
+				if self.args.len() - arg_pos > convert!(@impl/count {$($which)*})
 				{
-					if args.len() - arg_pos > convert!(@impl/count {$($which)*})
-					{
-						let need = arg_pos.saturating_add(convert!(@impl/count {$($which)*}));
-						let err = InstrErrorKind::TooManyArguments{instr: name.to_owned(), need, have: args.len()};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Trivial);
-					}
-					if args.len() - arg_pos < convert!(@impl/count {$($which)*})
-					{
-						let need = arg_pos.saturating_add(convert!(@impl/count {$($which)*}));
-						let err = InstrErrorKind::NotEnoughArguments{instr: name.to_owned(), need, have: args.len()};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Trivial);
-					}
-					$(
-						#[allow(unused_assignments)] // for blind arg_pos updates
-						let $data = convert!(@impl/get $which);
-					)*
-					$($result)+
+					let need = convert!(@impl/count {$($which)*});
+					self.push_error(ctx, InstrErrorKind::TooManyArguments{instr: instr_name.to_owned(), need, have: self.args.len()});
+					return Err(ErrorLevel::Trivial);
 				}
+				if self.args.len() - arg_pos < convert!(@impl/count {$($which)*})
+				{
+					let need = convert!(@impl/count {$($which)*});
+					self.push_error(ctx, InstrErrorKind::NotEnoughArguments{instr: instr_name.to_owned(), need, have: self.args.len()});
+					return Err(ErrorLevel::Trivial);
+				}
+				$(convert!(@impl/set $data $which);)*
 			};
 			(@impl/count {$($arg:tt)*}) => {<[()]>::len(&[$(convert!(@impl/count/map $arg)),*])};
 			(@impl/count/map $_:tt) => {()};
+			(@impl/set $dst:ident $which:ident) =>
+			{
+				let $dst = convert!(@impl/get $which);
+			};
+			(@impl/set {$dst:expr} $which:ident) =>
+			{
+				$dst = convert!(@impl/get $which);
+			};
 			(@impl/get Immediate) =>
 			{
-				match args[arg_pos]
 				{
-					Argument::Constant(Number::Integer(val)) =>
+					let arg = &mut self.args[arg_pos];
+					if self.args_done <= arg_pos
 					{
-						let Ok(val) = i32::try_from(val)
-						else
+						match evaluate(arg, ctx)
 						{
-							let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos + 1};
-							ctx.push_error(Positioned{line, col, value: err});
-							return Err(ErrorLevel::Fatal);
-						};
-						arg_pos += 1;
-						val
-					},
-					ref arg =>
+							Ok(Evaluation::Complete{..}) => (),
+							Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
+							Err(e) =>
+							{
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
+							},
+						}
+						self.args_done = arg_pos + 1;
+					}
+					match *arg
 					{
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Constant, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Trivial);
-					},
+						Argument::Constant(Number::Integer(val)) =>
+						{
+							let Ok(val) = i32::try_from(val)
+							else
+							{
+								self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								return Err(ErrorLevel::Trivial);
+							};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							val
+						},
+						ref arg =>
+						{
+							let have = arg.get_type();
+							self.push_error(ctx, InstrErrorKind::ArgumentType
+							{
+								instr: instr_name.to_owned(),
+								idx: arg_pos + 1,
+								need: ArgumentType::Constant,
+								have,
+							});
+							return Err(ErrorLevel::Trivial);
+						},
+					}
 				}
 			};
 			(@impl/get Identifier) =>
 			{
-				match args[arg_pos]
+				match self.args[arg_pos]
 				{
 					Argument::Identifier(ref ident) =>
 					{
-						arg_pos += 1;
+						#[allow(unused_assignments)] // always ignored for final argument
+						{arg_pos += 1;}
 						ident.as_ref()
 					},
 					ref arg =>
 					{
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
+						let have = arg.get_type();
+						self.push_error(ctx, InstrErrorKind::ArgumentType
+						{
+							instr: instr_name.to_owned(),
+							idx: arg_pos + 1,
+							need: ArgumentType::Identifier,
+							have,
+						});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
 			};
 			(@impl/get Register) =>
 			{
-				match args[arg_pos]
+				match self.args[arg_pos]
 				{
 					Argument::Identifier(ref ident) =>
 					{
-						let reg = match regl(ident.as_ref(), name, arg_pos + 1)
+						let reg = match regl(ident.as_ref(), instr_name, arg_pos + 1)
 						{
 							Ok(r) => r,
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{line, col, value: e});
-								return Err(ErrorLevel::Fatal);
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
 							},
 						};
-						arg_pos += 1;
+						#[allow(unused_assignments)] // always ignored for final argument
+						{arg_pos += 1;}
 						reg
 					},
 					ref arg =>
 					{
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
+						let have = arg.get_type();
+						self.push_error(ctx, InstrErrorKind::ArgumentType
+						{
+							instr: instr_name.to_owned(),
+							idx: arg_pos + 1,
+							need: ArgumentType::Identifier,
+							have,
+						});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
 			};
 			(@impl/get SystemReg) =>
 			{
-				match args[arg_pos]
+				match self.args[arg_pos]
 				{
 					Argument::Identifier(ref ident) =>
 					{
-						let reg = match sysl(ident.as_ref(), name, arg_pos + 1)
+						let reg = match sysl(ident.as_ref(), instr_name, arg_pos + 1)
 						{
 							Ok(r) => r,
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{line, col, value: e});
-								return Err(ErrorLevel::Fatal);
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
 							},
 						};
-						arg_pos += 1;
+						#[allow(unused_assignments)] // always ignored for final argument
+						{arg_pos += 1;}
 						reg
 					},
 					ref arg =>
 					{
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
+						let have = arg.get_type();
+						self.push_error(ctx, InstrErrorKind::ArgumentType
+						{
+							instr: instr_name.to_owned(),
+							idx: arg_pos + 1,
+							need: ArgumentType::Identifier,
+							have,
+						});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
 			};
 			(@impl/get ImmReg) =>
 			{
-				match args[arg_pos]
 				{
-					Argument::Constant(Number::Integer(val)) =>
+					let arg = &mut self.args[arg_pos];
+					if self.args_done <= arg_pos
 					{
-						let Ok(val) = i32::try_from(val)
-						else
+						match evaluate(arg, ctx)
 						{
-							let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos + 1};
-							ctx.push_error(Positioned{line, col, value: err});
-							return Err(ErrorLevel::Fatal);
-						};
-						arg_pos += 1;
-						ImmReg::Immediate(val)
-					},
-					Argument::Identifier(ref ident) =>
-					{
-						let reg = match regl(ident.as_ref(), name, arg_pos + 1)
-						{
-							Ok(r) => r,
+							Ok(Evaluation::Complete{..}) => (),
+							Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{line, col, value: e});
-								return Err(ErrorLevel::Fatal);
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
 							},
-						};
-						arg_pos += 1;
-						ImmReg::Register(reg)
-					},
-					ref arg =>
+						}
+						self.args_done = arg_pos + 1;
+					}
+					match *arg
 					{
-						// REM should indicate that an immediate value would also work
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Trivial);
-					},
+						Argument::Constant(Number::Integer(val)) =>
+						{
+							let Ok(val) = i32::try_from(val)
+							else
+							{
+								self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								return Err(ErrorLevel::Trivial);
+							};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							ImmReg::Immediate(val)
+						},
+						Argument::Identifier(ref ident) =>
+						{
+							let reg = match regl(ident.as_ref(), instr_name, arg_pos + 1)
+							{
+								Ok(r) => r,
+								Err(e) =>
+								{
+									self.push_error(ctx, e);
+									return Err(ErrorLevel::Trivial);
+								},
+							};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							ImmReg::Register(reg)
+						},
+						ref arg =>
+						{
+							let have = arg.get_type();
+							// REM should indicate that an immediate value would also work
+							self.push_error(ctx, InstrErrorKind::ArgumentType
+							{
+								instr: instr_name.to_owned(),
+								idx: arg_pos + 1,
+								need: ArgumentType::Identifier,
+								have,
+							});
+							return Err(ErrorLevel::Trivial);
+						},
+					}
 				}
 			};
 			(@impl/get RegSet) =>
 			{
-				match args[arg_pos]
+				match self.args[arg_pos]
 				{
 					Argument::Sequence(ref items) =>
 					{
-						let regs = match regset(items, name, arg_pos + 1)
+						let regs = match regset(items, instr_name, arg_pos + 1)
 						{
 							Ok(rs) => rs,
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{line, col, value: e});
-								return Err(ErrorLevel::Fatal);
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
 							},
 						};
-						arg_pos += 1;
+						#[allow(unused_assignments)] // always ignored for final argument
+						{arg_pos += 1;}
 						regs
 					},
 					ref arg =>
 					{
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Sequence, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
+						let have = arg.get_type();
+						self.push_error(ctx, InstrErrorKind::ArgumentType
+						{
+							instr: instr_name.to_owned(),
+							idx: arg_pos + 1,
+							need: ArgumentType::Sequence,
+							have,
+						});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
 			};
 			(@impl/get Address) =>
 			{
-				match args[arg_pos]
 				{
-					Argument::Address(ref addr) =>
+					let arg = &mut self.args[arg_pos];
+					if self.args_done <= arg_pos
 					{
-						let (addr, off) = match addr_off(&*addr, name, arg_pos + 1)
+						match evaluate(arg, ctx)
 						{
-							Ok((a, o)) => (a, o),
+							Ok(Evaluation::Complete{..}) => (),
+							Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{line, col, value: e});
-								return Err(ErrorLevel::Fatal);
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
 							},
-						};
-						arg_pos += 1;
-						(addr, off)
-					},
-					ref arg =>
+						}
+						self.args_done = arg_pos + 1;
+					}
+					match *arg
 					{
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Address, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Trivial);
-					},
+						Argument::Address(ref addr) =>
+						{
+							let (addr, off) = match addr_off(&*addr, instr_name, arg_pos + 1)
+							{
+								Ok((a, o)) => (a, o),
+								Err(e) =>
+								{
+									self.push_error(ctx, e);
+									return Err(ErrorLevel::Trivial);
+								},
+							};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							(addr, off)
+						},
+						ref arg =>
+						{
+							let have = arg.get_type();
+							self.push_error(ctx, InstrErrorKind::ArgumentType
+							{
+								instr: instr_name.to_owned(),
+								idx: arg_pos + 1,
+								need: ArgumentType::Address,
+								have,
+							});
+							return Err(ErrorLevel::Trivial);
+						},
+					}
 				}
 			};
 			(@impl/get AddrLabel) =>
 			{
-				match args[arg_pos]
+				match self.args[arg_pos]
 				{
-					Argument::Address(ref addr) =>
+					Argument::Address(ref mut addr) =>
 					{
-						let (addr, off) = match addr_off(&*addr, name, arg_pos + 1)
+						if self.args_done <= arg_pos
+						{
+							match evaluate(addr.as_mut(), ctx)
+							{
+								Ok(Evaluation::Complete{..}) => (),
+								Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
+								Err(e) =>
+								{
+									self.push_error(ctx, e);
+									return Err(ErrorLevel::Trivial);
+								},
+							}
+							self.args_done = arg_pos + 1;
+						}
+						
+						let (addr, off) = match addr_off(&*addr, instr_name, arg_pos + 1)
 						{
 							Ok((a, o)) => (a, o),
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{line, col, value: e});
-								return Err(ErrorLevel::Fatal);
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
 							},
 						};
-						arg_pos += 1;
+						#[allow(unused_assignments)] // always ignored for final argument
+						{arg_pos += 1;}
 						AddrLabel::Address(addr, off)
 					},
 					Argument::Identifier(ref ident) =>
 					{
-						arg_pos += 1;
+						#[allow(unused_assignments)] // always ignored for final argument
+						{arg_pos += 1;}
 						AddrLabel::Label(ident.as_ref())
 					},
 					ref arg =>
 					{
+						let have = arg.get_type();
 						// REM should indicate that an address would also work
-						let err = InstrErrorKind::ArgumentType{instr: name.to_owned(), idx: arg_pos + 1, need: ArgumentType::Identifier, have: arg.get_type()};
-						ctx.push_error(Positioned{line, col, value: err});
+						self.push_error(ctx, InstrErrorKind::ArgumentType
+						{
+							instr: instr_name.to_owned(),
+							idx: arg_pos + 1,
+							need: ArgumentType::Identifier,
+							have,
+						});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
 			};
 		}
 		
-		let mut defer_label = None;
-		let mut temp_name = [0u8; 16];
-		let temp_name = if name.len() < temp_name.len()
+		//let mut defer_label = None;
+		match &mut self.instr
 		{
-			temp_name[..name.len()].copy_from_slice(name.as_bytes());
-			temp_name.make_ascii_uppercase();
-			// SAFETY: above operation preserves ASCII-ness and leaves other unicode as-is
-			unsafe{core::str::from_utf8_unchecked(&temp_name[..name.len()])}
-		}
-		else {&""};
-		let mut instr = match temp_name
-		{
-			"ADCS" => convert!(dst: Register, rhs: Register{Instruction::Adc{dst, rhs}}),
-			"ADD" | "ADDS" => convert!(dst: Register, lhs: Register, rhs: ImmReg{Instruction::Add{flags: name.len() > 3, dst, lhs, rhs}}),
-			"ADR" =>
+			Instruction::Adc{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Add{dst, lhs, rhs, ..} => {convert!(({*dst}: Register) ({*lhs}: Register) ({*rhs}: ImmReg));},
+			Instruction::Adr{dst, off} =>
 			{
-				let (dst, label) = convert!(dst: Register, label: Identifier{(dst, label)});
-				let instr = Instruction::Adr{dst, off: 0};
-				defer_label = Some(label);
-				instr
-			},
-			"ANDS" => convert!(dst: Register, rhs: Register{Instruction::And{dst, rhs}}),
-			"ASRS" => convert!(dst: Register, value: Register, shift: ImmReg{Instruction::Asr{dst, value, shift}}),
-			"B" | "BEQ" | "BNE" | "BCS" | "BHS" | "BCC" | "BLO" | "BMI" | "BPL" | "BVS" | "BVC" | "BHI" | "BLS" | "BGE" | "BLT" | "BGT" | "BLE" =>
-			{
-				let cond = match temp_name
+				convert!(({*dst}: Register) (label: Identifier));
+				let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
 				{
-					"BEQ" => Condition::Equal,
-					"BNE" => Condition::NonEqual,
-					"BCS" => Condition::CarrySet,
-					"BHS" => Condition::CarrySet,
-					"BCC" => Condition::CarryClear,
-					"BLO" => Condition::CarryClear,
-					"BMI" => Condition::Minus,
-					"BPL" => Condition::Plus,
-					"BVS" => Condition::Overflow,
-					"BVC" => Condition::NoOverflow,
-					"BHI" => Condition::Higher,
-					"BLS" => Condition::LowerEqual,
-					"BGE" => Condition::GreaterEqual,
-					"BLT" => Condition::Less,
-					"BGT" => Condition::Greater,
-					"BLE" => Condition::LessEqual,
-					"B" => Condition::Always,
-					_ => unreachable!("unmapped conditional branch {name}"),
-				};
-				let label = convert!(label: Identifier{label});
-				let instr = Instruction::B{cond, off: 0};
-				defer_label = Some(label);
-				instr
-			},
-			"BIC" => convert!(dst: Register, rhs: Register{Instruction::And{dst, rhs}}),
-			"BKPT" =>
-			{
-				match convert!(info: Immediate{info})
-				{
-					info @ 0.. if info <= u8::MAX as i32 => Instruction::Bkpt{info: info as u8},
-					_ =>
+					let al_pc = (self.addr & !0b11).wrapping_add(4);
+					if tgt < al_pc || tgt - al_pc > 0xFF << 2
 					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
+						Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64})
+					}
+					else if ((tgt - al_pc) & 0b11) != 0
+					{
+						Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64})
+					}
+					else {Ok((tgt - al_pc) as u16)}
+				});
+				match r
+				{
+					Ok(tgt) => *off = tgt,
+					Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+				}
+			},
+			Instruction::And{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Asr{dst, value, shift} => {convert!(({*dst}: Register) ({*value}: Register) ({*shift}: ImmReg));},
+			&mut Instruction::B{cond, ref mut off} =>
+			{
+				convert!((label: Identifier));
+				let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
+				{
+					let pc = self.addr.wrapping_add(4);
+					let off_val = i64::from(tgt) - i64::from(pc);
+					let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
+					if off_val < min || off_val > max
+					{
+						return Err(ConstantError::Range{min, max, have: off_val});
+					}
+					else if (off_val & 0b1) != 0
+					{
+						return Err(ConstantError::Alignment{align: 0b10, have: off_val});
+					}
+					else {Ok(off_val as i32)}
+				});
+				match r
+				{
+					Ok(tgt) => *off = tgt,
+					Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+				}
+			},
+			Instruction::Bic{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Bkpt{info} =>
+			{
+				convert!((a_info: Immediate));
+				match u8::try_from(a_info)
+				{
+					Ok(i) => *info = i,
+					Err(..) =>
+					{
+						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						return Err(ErrorLevel::Trivial);
 					},
 				}
 			},
-			"BL" =>
+			Instruction::Bl{off} =>
 			{
-				let label = convert!(label: Identifier{label});
-				let instr = Instruction::Bl{off: 0};
-				defer_label = Some(label);
-				instr
-			},
-			"BLX" => convert!(off: Register{Instruction::Blx{off}}),
-			"BX" => convert!(off: Register{Instruction::Bx{off}}),
-			"CMN" => convert!(lhs: Register, rhs: Register{Instruction::Cmn{lhs, rhs}}),
-			"CMP" => convert!(lhs: Register, rhs: ImmReg{Instruction::Cmp{lhs, rhs}}),
-			"CPSID" | "CPSIE" =>
-			{
-				convert!(pm: Identifier
+				convert!((label: Identifier));
+				let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
 				{
-					if pm.eq_ignore_ascii_case("i")
+					let pc = self.addr.wrapping_add(4);
+					let off_val = i64::from(tgt) - i64::from(pc);
+					let (min, max) = (-1 << 24, (1 << 24) - 1);
+					if off_val < min || off_val > max
 					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
+						return Err(ConstantError::Range{min, max, have: off_val});
 					}
-				});
-				Instruction::Cps{enable: temp_name == "CPSIE"}
-			},
-			"DMB" =>
-			{
-				convert!(opt: Identifier
-				{
-					if !opt.eq_ignore_ascii_case("SV")
+					else if (off_val & 0b1) != 0
 					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
+						return Err(ConstantError::Alignment{align: 0b10, have: off_val});
 					}
+					else {Ok(off_val as i32)}
 				});
-				Instruction::Dmb
-			},
-			"DSB" =>
-			{
-				convert!(opt: Identifier
+				match r
 				{
-					if !opt.eq_ignore_ascii_case("SV")
-					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
-					}
-				});
-				Instruction::Dsb
+					Ok(tgt) => *off = tgt,
+					Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+				}
 			},
-			"EORS" => convert!(dst: Register, rhs: Register{Instruction::Eor{dst, rhs}}),
-			"ISB" =>
+			Instruction::Blx{off} => {convert!(({*off}: Register));},
+			Instruction::Bx{off} => {convert!(({*off}: Register));},
+			Instruction::Cmn{lhs, rhs} => {convert!(({*lhs}: Register) ({*rhs}: Register));},
+			Instruction::Cmp{lhs, rhs} => {convert!(({*lhs}: Register) ({*rhs}: ImmReg));},
+			Instruction::Cps{..} =>
 			{
-				convert!(opt: Identifier
+				convert!((pm: Identifier));
+				if !pm.eq_ignore_ascii_case("i")
 				{
-					if !opt.eq_ignore_ascii_case("SV")
-					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
-					}
-				});
-				Instruction::Isb
+					self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					return Err(ErrorLevel::Trivial);
+				}
 			},
-			"LDM" => convert!(addr: Register, registers: RegSet{Instruction::Ldm{addr, registers}}),
-			"LDR" =>
+			Instruction::Dmb | Instruction::Dsb | Instruction::Isb =>
 			{
-				convert!(dst: Register, addr: AddrLabel
+				convert!((opt: Identifier));
+				if !opt.eq_ignore_ascii_case("SV")
 				{
-					match addr
+					self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					return Err(ErrorLevel::Trivial);
+				}
+			},
+			Instruction::Eor{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Ldm{addr, registers} => {convert!(({*addr}: Register) ({*registers}: RegSet));},
+			Instruction::Ldr{dst, addr, off} =>
+			{
+				convert!(({*dst}: Register) (a_addr: AddrLabel));
+				match a_addr
+				{
+					AddrLabel::Address(a_addr, a_off) => {(*addr, *off) = (a_addr, a_off.unwrap_or(ImmReg::Immediate(0)));},
+					AddrLabel::Label(label) =>
 					{
-						AddrLabel::Address(addr, off) => Instruction::Ldr{dst, addr, off: off.unwrap_or(ImmReg::Immediate(0))},
-						AddrLabel::Label(label) =>
+						let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
 						{
-							let instr = Instruction::Ldr{dst, addr: Register::PC, off: ImmReg::Immediate(0)};
-							defer_label = Some(label);
-							instr
-						},
-					}
-				})
-			},
-			"LDRB" | "LDRH" | "LDRSB" | "LDRSH" =>
-			{
-				convert!(dst: Register, addr: Address
-				{
-					match temp_name
-					{
-						"LDRB" => Instruction::Ldrb{dst, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
-						"LDRH" => Instruction::Ldrh{dst, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
-						"LDRSB" =>
-						{
-							match addr.1
+							let al_pc = (self.addr & !0b11).wrapping_add(4);
+							if tgt < al_pc || tgt - al_pc > 0xFF << 2
 							{
-								None | Some(ImmReg::Immediate(..)) =>
-								{
-									let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-									ctx.push_error(Positioned{line, col, value: err});
-									return Err(ErrorLevel::Fatal);
-								},
-								Some(ImmReg::Register(off)) => Instruction::Ldrsb{dst, addr: addr.0, off},
+								return Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
 							}
-						},
-						"LDRSH" =>
-						{
-							match addr.1
+							else if ((tgt - al_pc) & 0b11) != 0
 							{
-								None | Some(ImmReg::Immediate(..)) =>
-								{
-									let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-									ctx.push_error(Positioned{line, col, value: err});
-									return Err(ErrorLevel::Fatal);
-								},
-								Some(ImmReg::Register(off)) => Instruction::Ldrsh{dst, addr: addr.0, off},
+								return Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
 							}
-						},
-						_ => unreachable!("unmapped load register opcode {name}"),
-					}
-				})
-			},
-			"LSLS" => convert!(dst: Register, value: Register, shift: ImmReg{Instruction::Lsl{dst, value, shift}}),
-			"LSRS" => convert!(dst: Register, value: Register, shift: ImmReg{Instruction::Lsr{dst, value, shift}}),
-			"MOV" | "MOVS" => convert!(dst: Register, src: ImmReg{Instruction::Mov{flags: name.len() > 3, dst, src}}),
-			"MRS" => convert!(dst: Register, src: SystemReg{Instruction::Mrs{dst, src}}),
-			"MSR" => convert!(dst: SystemReg, src: Register{Instruction::Msr{dst, src}}),
-			"MULS" => convert!(dst: Register, rhs: Register{Instruction::Mul{dst, rhs}}),
-			"MVNS" => convert!(dst: Register, value: Register{Instruction::Mvn{dst, value}}),
-			"NOP" => convert!({Instruction::Nop}),
-			"ORRS" => convert!(dst: Register, rhs: Register{Instruction::Orr{dst, rhs}}),
-			"POP" => convert!(registers: RegSet{Instruction::Pop{registers}}),
-			"PUSH" => convert!(registers: RegSet{Instruction::Push{registers}}),
-			"REV" => convert!(dst: Register, value: Register{Instruction::Rev{dst, value}}),
-			"REV16" => convert!(dst: Register, value: Register{Instruction::Rev16{dst, value}}),
-			"REVSH" => convert!(dst: Register, value: Register{Instruction::Revsh{dst, value}}),
-			"RORS" => convert!(dst: Register, rhs: Register{Instruction::Ror{dst, rhs}}),
-			"RSBS" =>
-			{
-				convert!(dst: Register, lhs: Register, rhs: Immediate
-				{
-					if rhs != 0
-					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
-					}
-					Instruction::Rsb{dst, lhs}
-				})
-			},
-			"SBCS" => convert!(dst: Register, rhs: Register{Instruction::Sbc{dst, rhs}}),
-			"SEV" => convert!({Instruction::Sev}),
-			"STM" => convert!(addr: Register, registers: RegSet{Instruction::Stm{addr, registers}}),
-			"STR" | "STRB" | "STRH" =>
-			{
-				convert!(src: Register, addr: Address
-				{
-					match temp_name
-					{
-						"STR" => Instruction::Str{src, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
-						"STRB" => Instruction::Strb{src, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
-						"STRH" => Instruction::Strh{src, addr: addr.0, off: addr.1.unwrap_or(ImmReg::Immediate(0))},
-						_ => unreachable!("unmapped store register opcode {name}"),
-					}
-				})
-			},
-			"SUB" | "SUBS" => convert!(dst: Register, lhs: Register, rhs: ImmReg{Instruction::Sub{flags: name.len() > 3, dst, lhs, rhs}}),
-			"SVC" =>
-			{
-				match convert!(info: Immediate{info})
-				{
-					info @ 0.. if info <= u8::MAX as i32 => Instruction::Svc{info: info as u8},
-					_ =>
-					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
+							else {Ok(ImmReg::Immediate((tgt - al_pc) as i32))}
+						});
+						match r
+						{
+							Ok(tgt) => (*addr, *off) = (Register::PC, tgt),
+							Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+						}
 					},
 				}
 			},
-			"SXTB" => convert!(dst: Register, value: Register{Instruction::Sxtb{dst, value}}),
-			"SXTH" => convert!(dst: Register, value: Register{Instruction::Sxth{dst, value}}),
-			"TST" => convert!(lhs: Register, rhs: Register{Instruction::Tst{lhs, rhs}}),
-			"UDF" | "UDF.N" | "UDF.W" =>
+			Instruction::Ldrb{dst, addr, off} | Instruction::Ldrh{dst, addr, off} =>
 			{
-				match convert!(info: Immediate{info})
+				convert!(({*dst}: Register) (a_addr: Address));
+				(*addr, *off) = (a_addr.0, a_addr.1.unwrap_or(ImmReg::Immediate(0)));
+			},
+			Instruction::Ldrsb{dst, addr, off} | Instruction::Ldrsh{dst, addr, off} =>
+			{
+				convert!(({*dst}: Register) (a_addr: Address));
+				match a_addr.1
 				{
-					info @ 0.. if info <= u8::MAX as i32 && temp_name.as_bytes()[name.len() - 1] != b'W' => Instruction::Udf{info: info as u8},
-					info @ 0.. if info <= u16::MAX as i32 && temp_name.as_bytes()[name.len() - 1] != b'N' => Instruction::Udfw{info: info as u16},
-					_ =>
+					None | Some(ImmReg::Immediate(..)) =>
 					{
-						let err = InstrErrorKind::ValueRange{instr: name.to_owned(), idx: arg_pos};
-						ctx.push_error(Positioned{line, col, value: err});
-						return Err(ErrorLevel::Fatal);
+						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						return Err(ErrorLevel::Trivial);
+					},
+					Some(ImmReg::Register(a_off)) => {(*addr, *off) = (a_addr.0, a_off);},
+				}
+			},
+			Instruction::Lsl{dst, value, shift} => {convert!(({*dst}: Register) ({*value}: Register) ({*shift}: ImmReg));},
+			Instruction::Lsr{dst, value, shift} => {convert!(({*dst}: Register) ({*value}: Register) ({*shift}: ImmReg));},
+			Instruction::Mov{dst, src, ..} => {convert!(({*dst}: Register) ({*src}: ImmReg));},
+			Instruction::Mrs{dst, src} => {convert!(({*dst}: Register) ({*src}: SystemReg));},
+			Instruction::Msr{dst, src} => {convert!(({*dst}: SystemReg) ({*src}: Register));},
+			Instruction::Mul{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Mvn{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Nop => {convert!();},
+			Instruction::Orr{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Pop{registers} => {convert!(({*registers}: RegSet));},
+			Instruction::Push{registers} => {convert!(({*registers}: RegSet));},
+			Instruction::Rev{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Rev16{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Revsh{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Ror{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Rsb{dst, lhs} =>
+			{
+				convert!(({*dst}: Register) ({*lhs}: Register) (rhs: Immediate));
+				if rhs != 0
+				{
+					self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					return Err(ErrorLevel::Trivial);
+				}
+			},
+			Instruction::Sbc{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
+			Instruction::Sev => {convert!();},
+			Instruction::Stm{addr, registers} => {convert!(({*addr}: Register) ({*registers}: RegSet));},
+			Instruction::Str{src, addr, off} | Instruction::Strb{src, addr, off} | Instruction::Strh{src, addr, off} =>
+			{
+				convert!(({*src}: Register) (a_addr: Address));
+				(*addr, *off) = (a_addr.0, a_addr.1.unwrap_or(ImmReg::Immediate(0)));
+			},
+			Instruction::Sub{dst, lhs, rhs, ..} => {convert!(({*dst}: Register) ({*lhs}: Register) ({*rhs}: ImmReg));},
+			Instruction::Svc{info} =>
+			{
+				convert!((a_info: Immediate));
+				match u8::try_from(a_info)
+				{
+					Ok(i) => *info = i,
+					Err(..) =>
+					{
+						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						return Err(ErrorLevel::Trivial);
 					},
 				}
 			},
-			"UXTB" => convert!(dst: Register, value: Register{Instruction::Uxtb{dst, value}}),
-			"UXTH" => convert!(dst: Register, value: Register{Instruction::Uxth{dst, value}}),
-			"WFE" => convert!({Instruction::Wfe}),
-			"WFI" => convert!({Instruction::Wfi}),
-			"YIELD" => convert!({Instruction::Yield}),
-			_ =>
+			Instruction::Sxtb{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Sxth{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Tst{lhs, rhs} => {convert!(({*lhs}: Register) ({*rhs}: Register));},
+			Instruction::Udf{info} =>
 			{
-				ctx.push_error(Positioned{line, col, value: InstrErrorKind::NoSuchInstruction(name.to_owned())});
-				return Err(ErrorLevel::Fatal);
+				convert!((a_info: Immediate));
+				match u8::try_from(a_info)
+				{
+					Ok(i) => *info = i,
+					Err(..) =>
+					{
+						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						return Err(ErrorLevel::Trivial);
+					},
+				}
 			},
+			Instruction::Udfw{info} =>
+			{
+				convert!((a_info: Immediate));
+				match u16::try_from(a_info)
+				{
+					Ok(i) => *info = i,
+					Err(..) =>
+					{
+						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						return Err(ErrorLevel::Trivial);
+					},
+				}
+			},
+			Instruction::Uxtb{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Uxth{dst, value} => {convert!(({*dst}: Register) ({*value}: Register));},
+			Instruction::Wfe => {convert!();},
+			Instruction::Wfi => {convert!();},
+			Instruction::Yield => {convert!();},
 		};
-		let mut tmp = [0u8; 4];
-		let curr_addr = ctx.active().unwrap().curr_addr();
-		if let Some(label) = defer_label
+		self.write_instr(ctx, false)?;
+		Ok(AsmOp::Completed)
+	}
+	
+	fn reduce_label<T, E: Error + 'static>(ctx: &mut Context, file_name: &mut Option<String>, line: u32, col: u32, label: &str,
+		func: impl FnOnce(u32) -> Result<T, E>) -> Result<T, Option<ErrorLevel>>
+	{
+		let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
+		if let Lookup::Found(have) = ctx.get_constant(label, realm)
 		{
-			if let Lookup::Found(have) = ctx.get_constant(label, Realm::Local)
+			match u32::try_from(have)
 			{
-				match u32::try_from(have)
+				Ok(tgt) =>
 				{
-					Ok(tgt) =>
+					match func(tgt)
 					{
-						match relocate_instr(curr_addr, tgt, &mut instr)
+						Ok(v) => Ok(v),
+						Err(e) =>
 						{
-							Ok(()) =>
-							{
-								defer_label = None;
-							},
+							let file_name = file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned()))
+								.unwrap_or_else(|| "<unknown>".to_owned());
+							ctx.push_error_in(PosNamed{name: file_name, line, col, value: e});
+							Err(Some(ErrorLevel::Trivial))
+						},
+					}
+				},
+				Err(..) =>
+				{
+					let file_name = file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned()))
+						.unwrap_or_else(|| "<unknown>".to_owned());
+					ctx.push_error_in(PosNamed{name: file_name, line, col, value: ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}});
+					Err(Some(ErrorLevel::Trivial))
+				},
+			}
+		}
+		else if realm == Realm::Global
+		{
+			// we've reached the end of the stack, this label won't be defined
+			let file_name = file_name.take().unwrap(); // both no `self.curr_path()` and `ArmInstr::file` should be set in global scope
+			ctx.push_error_in(PosNamed{name: file_name, line, col, value: ConstantError::NotFound{name: label.to_owned(), realm}});
+			Err(Some(ErrorLevel::Trivial))
+		}
+		else {Err(None)}
+	}
+	
+	fn write_instr(&mut self, ctx: &mut Context, deferred: bool) -> Result<(), ErrorLevel>
+	{
+		let mut tmp = [0u8; 4];
+		match self.instr.write(&mut tmp)
+		{
+			Ok(len) =>
+			{
+				if deferred
+				{
+					tmp.fill(0xBE); // BKPT 0xBE;
+				}
+				match ctx.active_mut()
+				{
+					Some(active) if self.addr >= active.base_addr() && self.addr <= active.curr_addr() =>
+					{
+						if let Err(e) = active.write_at(self.addr, &tmp[..len])
+						{
+							self.push_error(ctx, InstrErrorKind::Write(e));
+							return Err(ErrorLevel::Fatal);
+						}
+					},
+					_ =>
+					{
+						match ctx.output_mut().put(self.addr, &tmp[..len])
+						{
+							Ok(n) => assert_eq!(n, 0), // the active segment has changed, this ensures the bytes have been pre-allocated
 							Err(e) =>
 							{
-								ctx.push_error(Positioned{line, col, value: e});
+								self.push_error(ctx, InstrErrorKind::Generic(Box::new(e)));
 								return Err(ErrorLevel::Fatal);
 							},
 						}
 					},
-					Err(..) =>
-					{
-						ctx.push_error(Positioned{line, col, value: ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}});
-						return Err(ErrorLevel::Fatal);
-					},
-				}
-			}
-		}
-		match instr.write(&mut tmp)
-		{
-			Ok(len) =>
-			{
-				let active = ctx.active_mut().unwrap();
-				if let Err(e) = active.write(&tmp[..len])
-				{
-					ctx.push_error(Positioned{line, col, value: InstrErrorKind::Write(e)});
-					return Err(ErrorLevel::Fatal);
-				}
+				};
+				Ok(())
 			},
 			Err(e) =>
 			{
-				ctx.push_error(Positioned{line, col, value: InstrErrorKind::Generic(Box::new(e))});
+				self.push_error(ctx, InstrErrorKind::Generic(Box::new(e)));
 				return Err(ErrorLevel::Fatal);
 			},
 		}
-		if let Some(label) = defer_label
-		{
-			let addr = PosNamed
-			{
-				name: ctx.curr_path().unwrap().to_string_lossy().into_owned(),
-				line,
-				col,
-				value: curr_addr,
-			};
-			let label = label.to_owned();
-			ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, addr, instr, label)), Realm::Local);
-		}
-		Ok(())
 	}
 }
 
-fn relocate_instr(addr: u32, tgt: u32, instr: &mut Instruction) -> Result<(), ConstantError>
+impl ArmInstr<'static>
 {
-	match instr
+	fn schedule(mut self, ctx: &mut Context, global: bool)
 	{
-		Instruction::Adr{off, ..} =>
+		ctx.add_task(Box::new(move |ctx|
 		{
-			let al_pc = (addr & !0b11).wrapping_add(4);
-			if tgt < al_pc || tgt - al_pc > 0xFF << 2
+			match self.assemble(ctx)
 			{
-				return Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
-			}
-			else if ((tgt - al_pc) & 0b11) != 0
-			{
-				return Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
-			}
-			else {*off = (tgt - al_pc) as u16;}
-		},
-		&mut Instruction::B{cond, ref mut off} =>
-		{
-			let pc = addr.wrapping_add(4);
-			let off_val = i64::from(tgt) - i64::from(pc);
-			let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
-			if off_val < min || off_val > max
-			{
-				return Err(ConstantError::Range{min, max, have: off_val});
-			}
-			else if (off_val & 0b1) != 0
-			{
-				return Err(ConstantError::Alignment{align: 0b10, have: off_val});
-			}
-			else {*off = off_val as i32}
-		},
-		Instruction::Bl{off} =>
-		{
-			let pc = addr.wrapping_add(4);
-			let off_val = i64::from(tgt) - i64::from(pc);
-			let (min, max) = (-1 << 24, (1 << 24) - 1);
-			if off_val < min || off_val > max
-			{
-				return Err(ConstantError::Range{min, max, have: off_val});
-			}
-			else if (off_val & 0b1) != 0
-			{
-				return Err(ConstantError::Alignment{align: 0b10, have: off_val});
-			}
-			else {*off = off_val as i32}
-		},
-		Instruction::Ldr{addr: Register::PC, off, ..} =>
-		{
-			let al_pc = (addr & !0b11).wrapping_add(4);
-			if tgt < al_pc || tgt - al_pc > 0xFF << 2
-			{
-				return Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
-			}
-			else if ((tgt - al_pc) & 0b11) != 0
-			{
-				return Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
-			}
-			else {*off = ImmReg::Immediate((tgt - al_pc) as i32);}
-		},
-		_ => unreachable!("missing relocation handler for {instr:?}"),
-	}
-	Ok(())
-}
-
-fn deferred_instr(ctx: &mut Context, addr: PosNamed<u32>, mut instr: Instruction, label: String) -> Result<(), ErrorLevel>
-{
-	let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
-	let tgt = match ctx.get_constant(label.as_str(), realm)
-	{
-		Lookup::NotFound =>
-		{
-			// needing a constant which doesn't exist
-			ctx.push_error_in(addr.convert(ConstantError::NotFound{name: label, realm}));
-			return Err(ErrorLevel::Trivial);
-		},
-		Lookup::Deferred =>
-		{
-			if realm == Realm::Global
-			{
-				// we've reached the end of the stack, this constant won't be defined
-				ctx.push_error_in(addr.convert(ConstantError::NotFound{name: label, realm}));
-				return Err(ErrorLevel::Trivial);
-			}
-			else
-			{
-				// the constant could be set by a different module later
-				ctx.add_task(Box::new(move |ctx| deferred_instr(ctx, addr, instr, label)), Realm::Global);
-				return Ok(());
-			}
-		},
-		Lookup::Found(have) =>
-		{
-			match u32::try_from(have)
-			{
-				Ok(v) => v,
-				Err(..) =>
+				Ok(AsmOp::Completed) => Ok(()),
+				Ok(AsmOp::Deferred) =>
 				{
-					ctx.push_error_in(addr.convert(ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}));
-					return Err(ErrorLevel::Trivial);
-				},
-			}
-		},
-	};
-	
-	match relocate_instr(addr.value, tgt, &mut instr)
-	{
-		Ok(()) => (),
-		Err(e) =>
-		{
-			ctx.push_error_in(addr.convert(e));
-			return Err(ErrorLevel::Trivial);
-		},
-	}
-	
-	let mut tmp = [0u8; 4];
-	match instr.write(&mut tmp)
-	{
-		Ok(len) =>
-		{
-			match ctx.active_mut()
-			{
-				Some(seg) if addr.value <= seg.curr_addr() && addr.value + (len as u32) > seg.base_addr() =>
-				{
-					// write to active segment if possible
-					if let Err(e) = seg.write_at(addr.value, &tmp[..len])
+					if global
 					{
-						ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
+						self.push_error(ctx, ConstantError::NotFound{name: "<unknown>".to_owned(), realm: Realm::Global});
 						return Err(ErrorLevel::Trivial);
 					}
+					self.schedule(ctx, true);
+					Ok(())
 				},
-				_ =>
-				{
-					// otherwise write directly to output
-					if let Err(e) = ctx.output_mut().put(addr.value, &tmp[..len])
-					{
-						ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
-						return Err(ErrorLevel::Trivial);
-					}
-				},
+				Err(e) => Err(e),
 			}
-		},
-		Err(e) =>
-		{
-			ctx.push_error_in(addr.convert(InstrErrorKind::Generic(Box::new(e))));
-			return Err(ErrorLevel::Trivial);
-		},
+		}), if global {Realm::Global} else {Realm::Local});
 	}
-	Ok(())
 }
 
 fn regl<'l>(name: &'l str, instr: &'l str, idx: usize) -> Result<Register, InstrErrorKind>
