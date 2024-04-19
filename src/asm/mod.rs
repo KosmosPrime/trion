@@ -129,6 +129,11 @@ impl<'l> Context<'l>
 			Segment::Inactive(..) => (),
 		}
 		let next = self.output.find(addr, Search::Above).map(|r| r.get_first());
+		if next.is_some_and(|n| n <= addr)
+		{
+			// `addr` is within the segment starting at `next` so this is occupied
+			return Err(SegmentError::Occupied(addr));
+		}
 		self.active.make_active(addr, next);
 		Ok(true)
 	}
