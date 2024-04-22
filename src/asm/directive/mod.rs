@@ -52,7 +52,7 @@ impl DirectiveList
 		}
 	}
 	
-	pub fn process<'c>(&self, ctx: &'c mut Context, contents: Positioned<(&str, &[Argument])>) -> Result<(), ErrorLevel>
+	pub fn process<'c>(&self, ctx: &'c mut Context, contents: Positioned<(&str, Vec<Argument>)>) -> Result<(), ErrorLevel>
 	{
 		match self.0.get(contents.value.0)
 		{
@@ -70,7 +70,7 @@ pub trait Directive: fmt::Debug
 {
 	fn get_name(&self) -> &str;
 	
-	fn apply(&self, ctx: & mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>;
+	fn apply(&self, ctx: & mut Context, args: Positioned<Vec<Argument>>) -> Result<(), ErrorLevel>;
 }
 
 pub type DirectiveError = Positioned<DirectiveErrorKind>;

@@ -296,7 +296,7 @@ impl<'l> Context<'l>
 			{
 				ElementValue::Directive{name, args} =>
 				{
-					if let Err(e) = self.directives.process(self, Positioned{line: element.line, col: element.col, value: (name.as_ref(), args.as_slice())})
+					if let Err(e) = self.directives.process(self, Positioned{line: element.line, col: element.col, value: (name.as_ref(), args)})
 					{
 						return Err(e);
 					}

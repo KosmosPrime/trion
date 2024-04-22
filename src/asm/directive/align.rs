@@ -1,8 +1,10 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::asm::{Context, ErrorLevel, SegmentError};
+use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
+use crate::asm::constant::Realm;
 use crate::asm::directive::{Directive, DirectiveErrorKind};
+use crate::asm::simplify::{evaluate, Evaluation};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
@@ -17,20 +19,35 @@ impl Directive for Align
 		"align"
 	}
 	
-	fn apply(&self, ctx: & mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
+	fn apply(&self, ctx: & mut Context, mut args: Positioned<Vec<Argument>>) -> Result<(), ErrorLevel>
 	{
-		let Some(active) = ctx.active_mut()
-		else
+		if ctx.active().is_none()
 		{
 			let source = Box::new(AlignError::Inactive);
 			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
-		};
+		}
 		if args.value.len() != 1
 		{
 			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
 			return Err(ErrorLevel::Trivial);
 		}
+		match evaluate(&mut args.value[0], ctx)
+		{
+			Ok(Evaluation::Complete{..}) => (),
+			Ok(Evaluation::Deferred{..}) =>
+			{
+				let source = Box::new(ConstantError::NotFound{name: "<unknown>".to_owned(), realm: Realm::Local});
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+				return Err(ErrorLevel::Fatal);
+			},
+			Err(e) =>
+			{
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source: Box::new(e)}));
+				return Err(ErrorLevel::Fatal);
+			},
+		}
+		let active = ctx.active_mut().unwrap();
 		let len = match args.value[0]
 		{
 			Argument::Constant(ref num) =>

@@ -19,7 +19,7 @@ impl Directive for Include
 		"include"
 	}
 	
-	fn apply(&self, ctx: & mut Context, args: Positioned<&[Argument]>) -> Result<(), ErrorLevel>
+	fn apply(&self, ctx: & mut Context, args: Positioned<Vec<Argument>>) -> Result<(), ErrorLevel>
 	{
 		if args.value.len() != 1
 		{
