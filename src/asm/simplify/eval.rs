@@ -33,6 +33,17 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 			else {Ok(Evaluation::Complete{changed: false})}
 		},
 		Argument::String(..) => Ok(Evaluation::Complete{changed: false}),
+		Argument::Sequence(args) | Argument::Function{args, ..} =>
+		{
+			args.iter_mut().try_fold(Evaluation::Complete{changed: false}, |c, a|
+			{
+				match evaluate(a, ctx)
+				{
+					Ok(r) => Ok(c | r),
+					Err(e) => Err(e),
+				}
+			})
+		},
 		_ =>
 		{
 			let eval = match arg
