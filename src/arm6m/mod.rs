@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::error::Error;
 
 use crate::arm6m::asm::{ImmReg, Instruction};
@@ -19,9 +20,10 @@ pub mod sysreg;
 pub mod reg;
 pub mod regset;
 
-enum AsmOp
+enum AsmOp<'c>
 {
-	Completed, Deferred,
+	Completed,
+	Deferred{cause: Cow<'c, str>},
 }
 
 enum AddrLabel<'l>
@@ -63,8 +65,12 @@ impl InstructionSet for Arm6M
 			{
 				match instr.assemble(ctx)
 				{
-					Ok(AsmOp::Completed) => Ok(()),
-					Ok(AsmOp::Deferred) =>
+					Ok(AsmOp::Completed) =>
+					{
+						instr.write_instr(ctx, false)?;
+						Ok(())
+					},
+					Ok(AsmOp::Deferred{..}) =>
 					{
 						instr.write_instr(ctx, true)?; // padding for whatever follows
 						instr.file_name = Some(ctx.curr_path().unwrap().to_string_lossy().into_owned());
@@ -210,7 +216,7 @@ impl<'l> ArmInstr<'l>
 		}
 	}
 	
-	fn assemble(&mut self, ctx: &mut Context) -> Result<AsmOp, ErrorLevel>
+	fn assemble<'s>(&'s mut self, ctx: &mut Context) -> Result<AsmOp<'s>, ErrorLevel>
 	{
 		let mut arg_pos = 0;
 		let instr_name = self.instr.get_name();
@@ -251,7 +257,7 @@ impl<'l> ArmInstr<'l>
 						match evaluate(arg, ctx)
 						{
 							Ok(Evaluation::Complete{..}) => (),
-							Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
+							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
 							Err(e) =>
 							{
 								self.push_error(ctx, e);
@@ -291,26 +297,27 @@ impl<'l> ArmInstr<'l>
 			};
 			(@impl/get Identifier) =>
 			{
-				match self.args[arg_pos]
 				{
-					Argument::Identifier(ref ident) =>
+					match self.args[arg_pos]
 					{
-						#[allow(unused_assignments)] // always ignored for final argument
-						{arg_pos += 1;}
-						ident.as_ref()
-					},
-					ref arg =>
-					{
-						let have = arg.get_type();
-						self.push_error(ctx, InstrErrorKind::ArgumentType
+						Argument::Identifier(..) => (),
+						ref arg =>
 						{
-							instr: instr_name.to_owned(),
-							idx: arg_pos + 1,
-							need: ArgumentType::Identifier,
-							have,
-						});
-						return Err(ErrorLevel::Trivial);
-					},
+							let have = arg.get_type();
+							self.push_error(ctx, InstrErrorKind::ArgumentType
+							{
+								instr: instr_name.to_owned(),
+								idx: arg_pos + 1,
+								need: ArgumentType::Identifier,
+								have,
+							});
+							return Err(ErrorLevel::Trivial);
+						},
+					}
+					let Argument::Identifier(ref ident) = self.args[arg_pos] else {unreachable!()};
+					#[allow(unused_assignments)] // always ignored for final argument
+					{arg_pos += 1;}
+					ident.as_ref()
 				}
 			};
 			(@impl/get Register) =>
@@ -388,7 +395,7 @@ impl<'l> ArmInstr<'l>
 						match evaluate(arg, ctx)
 						{
 							Ok(Evaluation::Complete{..}) => (),
-							Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
+							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
 							Err(e) =>
 							{
 								self.push_error(ctx, e);
@@ -484,7 +491,7 @@ impl<'l> ArmInstr<'l>
 						match evaluate(arg, ctx)
 						{
 							Ok(Evaluation::Complete{..}) => (),
-							Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
+							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
 							Err(e) =>
 							{
 								self.push_error(ctx, e);
@@ -527,57 +534,65 @@ impl<'l> ArmInstr<'l>
 			};
 			(@impl/get AddrLabel) =>
 			{
-				match self.args[arg_pos]
 				{
-					Argument::Address(ref mut addr) =>
+					let addr = match self.args[arg_pos]
 					{
-						if self.args_done <= arg_pos
+						Argument::Address(ref mut addr) =>
 						{
-							match evaluate(addr.as_mut(), ctx)
+							if self.args_done <= arg_pos
 							{
-								Ok(Evaluation::Complete{..}) => (),
-								Ok(Evaluation::Deferred{..}) => return Ok(AsmOp::Deferred),
+								match evaluate(addr.as_mut(), ctx)
+								{
+									Ok(Evaluation::Complete{..}) => (),
+									Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
+									Err(e) =>
+									{
+										self.push_error(ctx, e);
+										return Err(ErrorLevel::Trivial);
+									},
+								}
+								self.args_done = arg_pos + 1;
+							}
+							
+							let (addr, off) = match addr_off(&*addr, instr_name, arg_pos + 1)
+							{
+								Ok((a, o)) => (a, o),
 								Err(e) =>
 								{
 									self.push_error(ctx, e);
 									return Err(ErrorLevel::Trivial);
 								},
-							}
-							self.args_done = arg_pos + 1;
-						}
-						
-						let (addr, off) = match addr_off(&*addr, instr_name, arg_pos + 1)
+							};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							Some((addr, off))
+						},
+						Argument::Identifier(..) => None,
+						ref arg =>
 						{
-							Ok((a, o)) => (a, o),
-							Err(e) =>
+							let have = arg.get_type();
+							// REM should indicate that an address would also work
+							self.push_error(ctx, InstrErrorKind::ArgumentType
 							{
-								self.push_error(ctx, e);
-								return Err(ErrorLevel::Trivial);
-							},
-						};
-						#[allow(unused_assignments)] // always ignored for final argument
-						{arg_pos += 1;}
-						AddrLabel::Address(addr, off)
-					},
-					Argument::Identifier(ref ident) =>
+								instr: instr_name.to_owned(),
+								idx: arg_pos + 1,
+								need: ArgumentType::Identifier,
+								have,
+							});
+							return Err(ErrorLevel::Trivial);
+						},
+					};
+					match addr
 					{
-						#[allow(unused_assignments)] // always ignored for final argument
-						{arg_pos += 1;}
-						AddrLabel::Label(ident.as_ref())
-					},
-					ref arg =>
-					{
-						let have = arg.get_type();
-						// REM should indicate that an address would also work
-						self.push_error(ctx, InstrErrorKind::ArgumentType
+						None =>
 						{
-							instr: instr_name.to_owned(),
-							idx: arg_pos + 1,
-							need: ArgumentType::Identifier,
-							have,
-						});
-						return Err(ErrorLevel::Trivial);
-					},
+							let Argument::Identifier(ref ident) = self.args[arg_pos] else {unreachable!()};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							AddrLabel::Label(ident.as_ref())
+						},
+						Some((addr, off)) => AddrLabel::Address(addr, off),
+					}
 				}
 			};
 		}
@@ -606,7 +621,7 @@ impl<'l> ArmInstr<'l>
 				match r
 				{
 					Ok(tgt) => *off = tgt,
-					Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+					Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
 				}
 			},
 			Instruction::And{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
@@ -632,7 +647,7 @@ impl<'l> ArmInstr<'l>
 				match r
 				{
 					Ok(tgt) => *off = tgt,
-					Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+					Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
 				}
 			},
 			Instruction::Bic{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
@@ -670,7 +685,7 @@ impl<'l> ArmInstr<'l>
 				match r
 				{
 					Ok(tgt) => *off = tgt,
-					Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+					Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
 				}
 			},
 			Instruction::Blx{off} => {convert!(({*off}: Register));},
@@ -721,7 +736,7 @@ impl<'l> ArmInstr<'l>
 						match r
 						{
 							Ok(tgt) => (*addr, *off) = (Register::PC, tgt),
-							Err(r) => return r.map(Err).unwrap_or(Ok(AsmOp::Deferred)),
+							Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
 						}
 					},
 				}
@@ -825,7 +840,6 @@ impl<'l> ArmInstr<'l>
 			Instruction::Wfi => {convert!();},
 			Instruction::Yield => {convert!();},
 		};
-		self.write_instr(ctx, false)?;
 		Ok(AsmOp::Completed)
 	}
 	
@@ -923,12 +937,17 @@ impl ArmInstr<'static>
 		{
 			match self.assemble(ctx)
 			{
-				Ok(AsmOp::Completed) => Ok(()),
-				Ok(AsmOp::Deferred) =>
+				Ok(AsmOp::Completed) =>
+				{
+					self.write_instr(ctx, false)?;
+					Ok(())
+				},
+				Ok(AsmOp::Deferred{cause}) =>
 				{
 					if global
 					{
-						self.push_error(ctx, ConstantError::NotFound{name: "<unknown>".to_owned(), realm: Realm::Global});
+						let name = cause.into_owned();
+						self.push_error(ctx, ConstantError::NotFound{name, realm: Realm::Global});
 						return Err(ErrorLevel::Trivial);
 					}
 					self.schedule(ctx, true);

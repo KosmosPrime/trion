@@ -400,7 +400,7 @@ fn evaluate_ok()
 		},
 		"base + r0 * 4 + 3", ctx => {Ok(val, r)} in
 		{
-			assert_eq!(r, Evaluation::Deferred{changed: false});
+			assert!(matches!(r, Evaluation::Deferred{changed: false, cause} if cause == "base"));
 			let Argument::Add{lhs: ref mid, ref rhs} = val else {panic!("{val:?}")};
 			let Argument::Add{ref lhs, rhs: ref mhs} = **mid else {panic!("{mid:?}")};
 			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "base"), "{lhs:?}");
@@ -411,7 +411,7 @@ fn evaluate_ok()
 		},
 		"paragraph % zero", ctx => {Ok(val, r)} in
 		{
-			assert_eq!(r, Evaluation::Deferred{changed: true});
+			assert!(matches!(r, Evaluation::Deferred{changed: true, cause} if cause == "paragraph"));
 			let Argument::Modulo{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "paragraph"), "{lhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(0))), "{rhs:?}");

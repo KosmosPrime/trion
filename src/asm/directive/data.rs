@@ -1,5 +1,6 @@
 use core::fmt;
 use core::mem;
+use std::borrow::Cow;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
@@ -13,9 +14,10 @@ use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
 
-enum DataOp
+enum DataOp<'c>
 {
-	Completed, Deferred,
+	Completed,
+	Deferred{cause: Cow<'c, str>},
 }
 
 struct DataExpr<'l>
@@ -62,7 +64,7 @@ impl<'l> DataExpr<'l>
 		}
 	}
 	
-	fn apply(&mut self, ctx: &mut Context) -> Result<DataOp, ErrorLevel>
+	fn apply<'s>(&'s mut self, ctx: &mut Context) -> Result<DataOp<'s>, ErrorLevel>
 	{
 		match evaluate(&mut self.arg, ctx)
 		{
@@ -74,7 +76,7 @@ impl<'l> DataExpr<'l>
 					Err(e) => Err(e),
 				}
 			},
-			Ok(Evaluation::Deferred{..}) => return Ok(DataOp::Deferred),
+			Ok(Evaluation::Deferred{cause, ..}) => return Ok(DataOp::Deferred{cause}),
 			Err(e) =>
 			{
 				self.push_error(ctx, e);
@@ -121,11 +123,12 @@ impl DataExpr<'static>
 			match self.apply(ctx)
 			{
 				Ok(DataOp::Completed) => Ok(()),
-				Ok(DataOp::Deferred) =>
+				Ok(DataOp::Deferred{cause}) =>
 				{
 					if global
 					{
-						self.push_error(ctx, ConstantError::NotFound{name: "<unknown>".to_owned(), realm: Realm::Global});
+						let name = cause.into_owned();
+						self.push_error(ctx, ConstantError::NotFound{name, realm: Realm::Global});
 						return Err(ErrorLevel::Trivial);
 					}
 					self.schedule(ctx, true);
@@ -195,7 +198,7 @@ macro_rules!generate_expr
 				match data.apply(ctx)
 				{
 					Ok(DataOp::Completed) => Ok(()),
-					Ok(DataOp::Deferred) =>
+					Ok(DataOp::Deferred{..}) =>
 					{
 						data.write_data(ctx, &[0xBE; $size])?; // padding for whatever follows
 						data.file_name = Some(ctx.curr_path().unwrap().to_string_lossy().into_owned());

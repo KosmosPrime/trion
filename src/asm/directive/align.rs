@@ -35,9 +35,9 @@ impl Directive for Align
 		match evaluate(&mut args.value[0], ctx)
 		{
 			Ok(Evaluation::Complete{..}) => (),
-			Ok(Evaluation::Deferred{..}) =>
+			Ok(Evaluation::Deferred{cause, ..}) =>
 			{
-				let source = Box::new(ConstantError::NotFound{name: "<unknown>".to_owned(), realm: Realm::Local});
+				let source = Box::new(ConstantError::NotFound{name: cause.into_owned(), realm: Realm::Local});
 				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},

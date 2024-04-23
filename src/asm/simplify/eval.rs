@@ -1,5 +1,6 @@
 use core::fmt;
 use core::ops::BitOr;
+use std::borrow::Cow;
 use std::error::Error;
 
 use crate::asm::Context;
@@ -8,7 +9,7 @@ use crate::asm::constant::{Lookup, Realm};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
 
-pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluation, EvalError>
+pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluation<'l>, EvalError>
 {
 	match arg
 	{
@@ -20,8 +21,8 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 				let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
 				return match ctx.get_constant(name, realm)
 				{
-					Lookup::NotFound => Err(EvalError::NoSuchVariable{name: name.as_ref().to_owned(), realm: Realm::Local}),
-					Lookup::Deferred => Ok(Evaluation::Deferred{changed: false}),
+					Lookup::NotFound => return Err(EvalError::NoSuchVariable{name: name.as_ref().to_owned(), realm: Realm::Local}),
+					Lookup::Deferred => return Ok(Evaluation::Deferred{changed: false, cause: name.clone()}),
 					Lookup::Found(val) =>
 					{
 						*arg = Argument::Constant(Number::Integer(val));
@@ -50,42 +51,46 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 	}
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Evaluation
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Evaluation<'c>
 {
 	Complete{changed: bool},
-	Deferred{changed: bool},
+	Deferred{changed: bool, cause: Cow<'c, str>},
 }
 
-impl Evaluation
+impl<'c> Evaluation<'c>
 {
 	pub fn is_changed(&self) -> bool
 	{
 		match *self
 		{
 			Self::Complete{changed} => changed,
-			Self::Deferred{changed} => changed,
+			Self::Deferred{changed, ..} => changed,
 		}
 	}
 }
 
-impl BitOr for Evaluation
+impl<'c> BitOr for Evaluation<'c>
 {
 	type Output = Self;
 	
 	fn bitor(self, rhs: Self) -> Self::Output
 	{
-		let (ch_lhs, def_lhs) = match self
+		let (ch_lhs, dc_lhs) = match self
 		{
-			Self::Complete{changed} => (changed, false),
-			Self::Deferred{changed} => (changed, true),
+			Self::Complete{changed} => (changed, None),
+			Self::Deferred{changed, cause} => (changed, Some(cause)),
 		};
-		let (ch_rhs, def_rhs) = match rhs
+		let (ch_rhs, dc_rhs) = match rhs
 		{
-			Self::Complete{changed} => (changed, false),
-			Self::Deferred{changed} => (changed, true),
+			Self::Complete{changed} => (changed, None),
+			Self::Deferred{changed, cause} => (changed, Some(cause)),
 		};
-		if def_lhs || def_rhs {Self::Deferred{changed: ch_lhs | ch_rhs}} else {Self::Complete{changed: ch_lhs | ch_rhs}}
+		match dc_lhs.or(dc_rhs)
+		{
+			None => Self::Complete{changed: ch_lhs | ch_rhs},
+			Some(cause) => Self::Deferred{changed: ch_lhs | ch_rhs, cause},
+		}
 	}
 }
 
