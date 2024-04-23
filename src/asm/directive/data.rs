@@ -9,7 +9,7 @@ use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
 use crate::asm::constant::Realm;
 use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::asm::memory::map::PutError;
-use crate::asm::simplify::{evaluate, Evaluation};
+use crate::asm::simplify::{evaluate, EvalError, Evaluation};
 use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
@@ -64,7 +64,7 @@ impl<'l> DataExpr<'l>
 		}
 	}
 	
-	fn apply<'s>(&'s mut self, ctx: &mut Context) -> Result<DataOp<'s>, ErrorLevel>
+	fn apply<'s>(&'s mut self, ctx: &mut Context, local: bool) -> Result<DataOp<'s>, ErrorLevel>
 	{
 		match evaluate(&mut self.arg, ctx)
 		{
@@ -79,6 +79,13 @@ impl<'l> DataExpr<'l>
 			Ok(Evaluation::Deferred{cause, ..}) => return Ok(DataOp::Deferred{cause}),
 			Err(e) =>
 			{
+				if local
+				{
+					if let EvalError::NoSuchVariable{name, ..} = e
+					{
+						return Ok(DataOp::Deferred{cause: Cow::Owned(name)});
+					}
+				}
 				self.push_error(ctx, e);
 				Err(ErrorLevel::Trivial)
 			},
@@ -120,7 +127,7 @@ impl DataExpr<'static>
 	{
 		ctx.add_task(Box::new(move |ctx|
 		{
-			match self.apply(ctx)
+			match self.apply(ctx, false)
 			{
 				Ok(DataOp::Completed) => Ok(()),
 				Ok(DataOp::Deferred{cause}) =>
@@ -195,17 +202,16 @@ macro_rules!generate_expr
 						},
 					}
 				});
-				match data.apply(ctx)
+				match data.apply(ctx, true)
 				{
 					Ok(DataOp::Completed) => Ok(()),
-					Ok(DataOp::Deferred{..}) =>
+					_ =>
 					{
 						data.write_data(ctx, &[0xBE; $size])?; // padding for whatever follows
 						data.file_name = Some(ctx.curr_path().unwrap().to_string_lossy().into_owned());
 						data.into_owned().schedule(ctx, false);
 						Ok(())
 					},
-					Err(e) => Err(e),
 				}
 			}
 		}

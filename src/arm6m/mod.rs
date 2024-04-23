@@ -9,7 +9,7 @@ use crate::arm6m::sysreg::SystemReg;
 use crate::asm::{ConstantError, Context, ErrorLevel};
 use crate::asm::constant::{Lookup, Realm};
 use crate::asm::instr::{InstrErrorKind, InstructionError, InstructionSet};
-use crate::asm::simplify::{evaluate, Evaluation};
+use crate::asm::simplify::{evaluate, EvalError, Evaluation};
 use crate::text::{PosNamed, Positioned};
 use crate::text::parse::{Argument, ArgumentType};
 use crate::text::token::Number;
@@ -63,21 +63,20 @@ impl InstructionSet for Arm6M
 		{
 			Ok(mut instr) =>
 			{
-				match instr.assemble(ctx)
+				match instr.assemble(ctx, true)
 				{
 					Ok(AsmOp::Completed) =>
 					{
 						instr.write_instr(ctx, false)?;
 						Ok(())
 					},
-					Ok(AsmOp::Deferred{..}) =>
+					_ =>
 					{
 						instr.write_instr(ctx, true)?; // padding for whatever follows
 						instr.file_name = Some(ctx.curr_path().unwrap().to_string_lossy().into_owned());
 						instr.into_owned().schedule(ctx, false);
 						Ok(())
 					},
-					Err(e) => Err(e),
 				}
 			},
 			Err(e) =>
@@ -216,7 +215,7 @@ impl<'l> ArmInstr<'l>
 		}
 	}
 	
-	fn assemble<'s>(&'s mut self, ctx: &mut Context) -> Result<AsmOp<'s>, ErrorLevel>
+	fn assemble<'s>(&'s mut self, ctx: &mut Context, local: bool) -> Result<AsmOp<'s>, ErrorLevel>
 	{
 		let mut arg_pos = 0;
 		let instr_name = self.instr.get_name();
@@ -260,6 +259,13 @@ impl<'l> ArmInstr<'l>
 							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
 							Err(e) =>
 							{
+								if local
+								{
+									if let EvalError::NoSuchVariable{name, ..} = e
+									{
+										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+									}
+								}
 								self.push_error(ctx, e);
 								return Err(ErrorLevel::Trivial);
 							},
@@ -398,6 +404,13 @@ impl<'l> ArmInstr<'l>
 							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
 							Err(e) =>
 							{
+								if local
+								{
+									if let EvalError::NoSuchVariable{name, ..} = e
+									{
+										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+									}
+								}
 								self.push_error(ctx, e);
 								return Err(ErrorLevel::Trivial);
 							},
@@ -494,6 +507,13 @@ impl<'l> ArmInstr<'l>
 							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
 							Err(e) =>
 							{
+								if local
+								{
+									if let EvalError::NoSuchVariable{name, ..} = e
+									{
+										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+									}
+								}
 								self.push_error(ctx, e);
 								return Err(ErrorLevel::Trivial);
 							},
@@ -547,6 +567,13 @@ impl<'l> ArmInstr<'l>
 									Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
 									Err(e) =>
 									{
+										if local
+										{
+											if let EvalError::NoSuchVariable{name, ..} = e
+											{
+												return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+											}
+										}
 										self.push_error(ctx, e);
 										return Err(ErrorLevel::Trivial);
 									},
@@ -935,7 +962,7 @@ impl ArmInstr<'static>
 	{
 		ctx.add_task(Box::new(move |ctx|
 		{
-			match self.assemble(ctx)
+			match self.assemble(ctx, false)
 			{
 				Ok(AsmOp::Completed) =>
 				{
