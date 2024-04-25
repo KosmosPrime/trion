@@ -190,15 +190,20 @@ impl<'l> ArmInstr<'l>
 			"WFE" => Instruction::Wfe,
 			"WFI" => Instruction::Wfi,
 			"YIELD" => Instruction::Yield,
-			_ => return Err(Positioned{line, col, value: InstrErrorKind::NoSuchInstruction(name.to_owned())}),
+			_ => return Err(Positioned{line, col, value: InstrErrorKind::NotFound(name.to_owned())}),
 		};
 		Ok(Self{file_name: None, line, col, addr, instr, args_done: 0, args})
 	}
 	
-	fn push_error<E: Error + 'static>(&mut self, ctx: &mut Context, err: E)
+	fn push_error<E: Error + 'static>(&mut self, ctx: &mut Context, source: E)
 	{
-		let name = self.file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| "<unknown>".to_owned());
-		ctx.push_error_in(PosNamed{name, line: self.line, col: self.col, value: err});
+		self.push_error_raw(ctx, InstrErrorKind::Assemble(Box::new(source)));
+	}
+	
+	fn push_error_raw(&mut self, ctx: &mut Context, err: InstrErrorKind)
+	{
+		let file_name = self.file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| "<unknown>".to_owned());
+		ctx.push_error_in(PosNamed{name: file_name, line: self.line, col: self.col, value: err});
 	}
 	
 	fn into_owned(self) -> ArmInstr<'static>
@@ -225,14 +230,14 @@ impl<'l> ArmInstr<'l>
 			{
 				if self.args.len() - arg_pos > convert!(@impl/count {$($which)*})
 				{
-					let need = convert!(@impl/count {$($which)*});
-					self.push_error(ctx, InstrErrorKind::TooManyArguments{instr: instr_name.to_owned(), need, have: self.args.len()});
+					let max = convert!(@impl/count {$($which)*});
+					self.push_error_raw(ctx, InstrErrorKind::TooManyArguments{instr: instr_name.to_owned(), max, have: self.args.len()});
 					return Err(ErrorLevel::Trivial);
 				}
 				if self.args.len() - arg_pos < convert!(@impl/count {$($which)*})
 				{
 					let need = convert!(@impl/count {$($which)*});
-					self.push_error(ctx, InstrErrorKind::NotEnoughArguments{instr: instr_name.to_owned(), need, have: self.args.len()});
+					self.push_error_raw(ctx, InstrErrorKind::NotEnoughArguments{instr: instr_name.to_owned(), need, have: self.args.len()});
 					return Err(ErrorLevel::Trivial);
 				}
 				$(convert!(@impl/set $data $which);)*
@@ -279,7 +284,7 @@ impl<'l> ArmInstr<'l>
 							let Ok(val) = i32::try_from(val)
 							else
 							{
-								self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
 								return Err(ErrorLevel::Trivial);
 							};
 							#[allow(unused_assignments)] // always ignored for final argument
@@ -289,11 +294,11 @@ impl<'l> ArmInstr<'l>
 						ref arg =>
 						{
 							let have = arg.get_type();
-							self.push_error(ctx, InstrErrorKind::ArgumentType
+							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								need: ArgumentType::Constant,
+								expect: ArgumentType::Constant,
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -310,11 +315,11 @@ impl<'l> ArmInstr<'l>
 						ref arg =>
 						{
 							let have = arg.get_type();
-							self.push_error(ctx, InstrErrorKind::ArgumentType
+							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								need: ArgumentType::Identifier,
+								expect: ArgumentType::Identifier,
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -337,7 +342,7 @@ impl<'l> ArmInstr<'l>
 							Ok(r) => r,
 							Err(e) =>
 							{
-								self.push_error(ctx, e);
+								self.push_error_raw(ctx, e);
 								return Err(ErrorLevel::Trivial);
 							},
 						};
@@ -348,11 +353,11 @@ impl<'l> ArmInstr<'l>
 					ref arg =>
 					{
 						let have = arg.get_type();
-						self.push_error(ctx, InstrErrorKind::ArgumentType
+						self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 						{
 							instr: instr_name.to_owned(),
 							idx: arg_pos + 1,
-							need: ArgumentType::Identifier,
+							expect: ArgumentType::Identifier,
 							have,
 						});
 						return Err(ErrorLevel::Trivial);
@@ -370,7 +375,7 @@ impl<'l> ArmInstr<'l>
 							Ok(r) => r,
 							Err(e) =>
 							{
-								self.push_error(ctx, e);
+								self.push_error_raw(ctx, e);
 								return Err(ErrorLevel::Trivial);
 							},
 						};
@@ -381,11 +386,11 @@ impl<'l> ArmInstr<'l>
 					ref arg =>
 					{
 						let have = arg.get_type();
-						self.push_error(ctx, InstrErrorKind::ArgumentType
+						self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 						{
 							instr: instr_name.to_owned(),
 							idx: arg_pos + 1,
-							need: ArgumentType::Identifier,
+							expect: ArgumentType::Identifier,
 							have,
 						});
 						return Err(ErrorLevel::Trivial);
@@ -424,7 +429,7 @@ impl<'l> ArmInstr<'l>
 							let Ok(val) = i32::try_from(val)
 							else
 							{
-								self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
 								return Err(ErrorLevel::Trivial);
 							};
 							#[allow(unused_assignments)] // always ignored for final argument
@@ -438,7 +443,7 @@ impl<'l> ArmInstr<'l>
 								Ok(r) => r,
 								Err(e) =>
 								{
-									self.push_error(ctx, e);
+									self.push_error_raw(ctx, e);
 									return Err(ErrorLevel::Trivial);
 								},
 							};
@@ -450,11 +455,11 @@ impl<'l> ArmInstr<'l>
 						{
 							let have = arg.get_type();
 							// REM should indicate that an immediate value would also work
-							self.push_error(ctx, InstrErrorKind::ArgumentType
+							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								need: ArgumentType::Identifier,
+								expect: ArgumentType::Identifier,
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -473,7 +478,7 @@ impl<'l> ArmInstr<'l>
 							Ok(rs) => rs,
 							Err(e) =>
 							{
-								self.push_error(ctx, e);
+								self.push_error_raw(ctx, e);
 								return Err(ErrorLevel::Trivial);
 							},
 						};
@@ -484,11 +489,11 @@ impl<'l> ArmInstr<'l>
 					ref arg =>
 					{
 						let have = arg.get_type();
-						self.push_error(ctx, InstrErrorKind::ArgumentType
+						self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 						{
 							instr: instr_name.to_owned(),
 							idx: arg_pos + 1,
-							need: ArgumentType::Sequence,
+							expect: ArgumentType::Sequence,
 							have,
 						});
 						return Err(ErrorLevel::Trivial);
@@ -529,7 +534,7 @@ impl<'l> ArmInstr<'l>
 								Ok((a, o)) => (a, o),
 								Err(e) =>
 								{
-									self.push_error(ctx, e);
+									self.push_error_raw(ctx, e);
 									return Err(ErrorLevel::Trivial);
 								},
 							};
@@ -540,11 +545,11 @@ impl<'l> ArmInstr<'l>
 						ref arg =>
 						{
 							let have = arg.get_type();
-							self.push_error(ctx, InstrErrorKind::ArgumentType
+							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								need: ArgumentType::Address,
+								expect: ArgumentType::Address,
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -586,7 +591,7 @@ impl<'l> ArmInstr<'l>
 								Ok((a, o)) => (a, o),
 								Err(e) =>
 								{
-									self.push_error(ctx, e);
+									self.push_error_raw(ctx, e);
 									return Err(ErrorLevel::Trivial);
 								},
 							};
@@ -599,11 +604,11 @@ impl<'l> ArmInstr<'l>
 						{
 							let have = arg.get_type();
 							// REM should indicate that an address would also work
-							self.push_error(ctx, InstrErrorKind::ArgumentType
+							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								need: ArgumentType::Identifier,
+								expect: ArgumentType::Identifier,
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -686,7 +691,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -724,7 +729,7 @@ impl<'l> ArmInstr<'l>
 				convert!((pm: Identifier));
 				if !pm.eq_ignore_ascii_case("i")
 				{
-					self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 					return Err(ErrorLevel::Trivial);
 				}
 			},
@@ -733,7 +738,7 @@ impl<'l> ArmInstr<'l>
 				convert!((opt: Identifier));
 				if !opt.eq_ignore_ascii_case("SV")
 				{
-					self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 					return Err(ErrorLevel::Trivial);
 				}
 			},
@@ -780,7 +785,7 @@ impl<'l> ArmInstr<'l>
 				{
 					None | Some(ImmReg::Immediate(..)) =>
 					{
-						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 					Some(ImmReg::Register(a_off)) => {(*addr, *off) = (a_addr.0, a_off);},
@@ -806,7 +811,7 @@ impl<'l> ArmInstr<'l>
 				convert!(({*dst}: Register) ({*lhs}: Register) (rhs: Immediate));
 				if rhs != 0
 				{
-					self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 					return Err(ErrorLevel::Trivial);
 				}
 			},
@@ -827,7 +832,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -843,7 +848,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -856,7 +861,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -887,7 +892,8 @@ impl<'l> ArmInstr<'l>
 						{
 							let file_name = file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned()))
 								.unwrap_or_else(|| "<unknown>".to_owned());
-							ctx.push_error_in(PosNamed{name: file_name, line, col, value: e});
+							let err = InstrErrorKind::Assemble(Box::new(e));
+							ctx.push_error_in(PosNamed{name: file_name, line, col, value: err});
 							Err(Some(ErrorLevel::Trivial))
 						},
 					}
@@ -896,7 +902,8 @@ impl<'l> ArmInstr<'l>
 				{
 					let file_name = file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned()))
 						.unwrap_or_else(|| "<unknown>".to_owned());
-					ctx.push_error_in(PosNamed{name: file_name, line, col, value: ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}});
+					let err = InstrErrorKind::Assemble(Box::new(ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}));
+					ctx.push_error_in(PosNamed{name: file_name, line, col, value: err});
 					Err(Some(ErrorLevel::Trivial))
 				},
 			}
@@ -905,7 +912,8 @@ impl<'l> ArmInstr<'l>
 		{
 			// we've reached the end of the stack, this label won't be defined
 			let file_name = file_name.take().unwrap(); // both no `self.curr_path()` and `ArmInstr::file` should be set in global scope
-			ctx.push_error_in(PosNamed{name: file_name, line, col, value: ConstantError::NotFound{name: label.to_owned(), realm}});
+			let err = InstrErrorKind::Assemble(Box::new(ConstantError::NotFound{name: label.to_owned(), realm}));
+			ctx.push_error_in(PosNamed{name: file_name, line, col, value: err});
 			Err(Some(ErrorLevel::Trivial))
 		}
 		else {Err(None)}
@@ -928,7 +936,7 @@ impl<'l> ArmInstr<'l>
 					{
 						if let Err(e) = active.write_at(self.addr, &tmp[..len])
 						{
-							self.push_error(ctx, InstrErrorKind::Write(e));
+							self.push_error_raw(ctx, InstrErrorKind::Write(e));
 							return Err(ErrorLevel::Fatal);
 						}
 					},
@@ -939,7 +947,7 @@ impl<'l> ArmInstr<'l>
 							Ok(n) => assert_eq!(n, 0), // the active segment has changed, this ensures the bytes have been pre-allocated
 							Err(e) =>
 							{
-								self.push_error(ctx, InstrErrorKind::Generic(Box::new(e)));
+								self.push_error_raw(ctx, InstrErrorKind::Put(e));
 								return Err(ErrorLevel::Fatal);
 							},
 						}
@@ -949,7 +957,7 @@ impl<'l> ArmInstr<'l>
 			},
 			Err(e) =>
 			{
-				self.push_error(ctx, InstrErrorKind::Generic(Box::new(e)));
+				self.push_error_raw(ctx, InstrErrorKind::Encode(e));
 				return Err(ErrorLevel::Fatal);
 			},
 		}
@@ -1054,7 +1062,7 @@ fn regset<'l>(items: &Vec<Argument<'l>>, instr: &'l str, idx: usize) -> Result<R
 		match arg
 		{
 			Argument::Identifier(ident) => {regs.add(regl(ident, instr, idx)?);},
-			_ => return Err(InstrErrorKind::ArgumentType{instr: instr.to_owned(), idx, need: ArgumentType::Identifier, have: arg.get_type()}),
+			_ => return Err(InstrErrorKind::ArgumentType{instr: instr.to_owned(), idx, expect: ArgumentType::Identifier, have: arg.get_type()}),
 		}
 	}
 	Ok(regs)

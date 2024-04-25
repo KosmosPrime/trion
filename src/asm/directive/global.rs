@@ -27,9 +27,14 @@ impl Directive for Global
 	
 	fn apply(&self, ctx: & mut Context, args: Positioned<Vec<Argument>>) -> Result<(), ErrorLevel>
 	{
-		if args.value.len() != 1
+		const NUM_ARGS: usize = 1;
+		if args.value.len() != NUM_ARGS
 		{
-			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+			let dir = self.get_name().to_owned();
+			ctx.push_error(args.convert(
+				if args.value.len() < NUM_ARGS {DirectiveErrorKind::NotEnoughArguments{dir, need: NUM_ARGS, have: args.value.len()}}
+				else {DirectiveErrorKind::TooManyArguments{dir, max: NUM_ARGS, have: args.value.len()}}
+			));
 			return Err(ErrorLevel::Trivial);
 		}
 		let name = match args.value[0]
@@ -37,7 +42,8 @@ impl Directive for Global
 			Argument::Identifier(ref n) => n.as_ref(),
 			ref arg =>
 			{
-				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::String, have: arg.get_type()}));
+				let dir = self.get_name().to_owned();
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::String, have: arg.get_type()}));
 				return Err(ErrorLevel::Trivial);
 			},
 		};
@@ -51,7 +57,7 @@ impl Directive for Global
 					Err(ConstantError::Duplicate{name, realm}) =>
 					{
 						let source = Box::new(GlobalError::Duplicate{name, realm});
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 					Err(e) => unreachable!("{e:?}"),
@@ -66,13 +72,13 @@ impl Directive for Global
 						Lookup::NotFound =>
 						{
 							let source = Box::new(GlobalError::NotFound{name, realm: Realm::Local});
-							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{name: this.get_name().to_owned(), source}});
+							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
 							return Err(ErrorLevel::Trivial);
 						},
 						Lookup::Deferred =>
 						{
 							let source = Box::new(GlobalError::Deferred{name, realm: Realm::Local});
-							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{name: this.get_name().to_owned(), source}});
+							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
 							return Err(ErrorLevel::Trivial);
 						},
 						Lookup::Found(v) => v,
@@ -83,7 +89,7 @@ impl Directive for Global
 						Err(ConstantError::Duplicate{name, realm}) =>
 						{
 							let source = Box::new(GlobalError::Duplicate{name, realm});
-							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{name: this.get_name().to_owned(), source}});
+							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
 							Err(ErrorLevel::Trivial)
 						},
 						Err(e) => unreachable!("{e:?}"),
@@ -99,7 +105,7 @@ impl Directive for Global
 					Lookup::NotFound =>
 					{
 						let source = Box::new(GlobalError::NotFound{name: name.to_owned(), realm: src_realm});
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 					Lookup::Deferred =>
@@ -112,7 +118,7 @@ impl Directive for Global
 								Err(ConstantError::Duplicate{name, realm}) =>
 								{
 									let source = Box::new(GlobalError::Duplicate{name, realm});
-									ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 									return Err(ErrorLevel::Fatal);
 								},
 								Err(e) => unreachable!("{e:?}"),
@@ -121,7 +127,7 @@ impl Directive for Global
 						else
 						{
 							let source = Box::new(GlobalError::Deferred{name: name.to_owned(), realm: src_realm});
-							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 							return Err(ErrorLevel::Fatal);
 						}
 					},
@@ -133,7 +139,7 @@ impl Directive for Global
 					Err(ConstantError::Duplicate{name, realm}) =>
 					{
 						let source = Box::new(GlobalError::Duplicate{name, realm});
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 					Err(e) => unreachable!("{e:?}"),

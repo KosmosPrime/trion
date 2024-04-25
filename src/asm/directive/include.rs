@@ -21,9 +21,14 @@ impl Directive for Include
 	
 	fn apply(&self, ctx: & mut Context, args: Positioned<Vec<Argument>>) -> Result<(), ErrorLevel>
 	{
-		if args.value.len() != 1
+		const NUM_ARGS: usize = 1;
+		if args.value.len() != NUM_ARGS
 		{
-			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+			let dir = self.get_name().to_owned();
+			ctx.push_error(args.convert(
+				if args.value.len() < NUM_ARGS {DirectiveErrorKind::NotEnoughArguments{dir, need: NUM_ARGS, have: args.value.len()}}
+				else {DirectiveErrorKind::TooManyArguments{dir, max: NUM_ARGS, have: args.value.len()}}
+			));
 			return Err(ErrorLevel::Trivial);
 		}
 		let path = match args.value[0]
@@ -41,7 +46,8 @@ impl Directive for Include
 			},
 			ref arg =>
 			{
-				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::String, have: arg.get_type()}));
+				let dir = self.get_name().to_owned();
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::String, have: arg.get_type()}));
 				return Err(ErrorLevel::Trivial);
 			},
 		};
@@ -51,7 +57,7 @@ impl Directive for Include
 			Err(err) =>
 			{
 				let source = Box::new(IncludeError::NoSuchFile{path, err});
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},
 		};
@@ -59,13 +65,13 @@ impl Directive for Include
 		if let Err(err) = f.read_to_end(&mut data)
 		{
 			let source = Box::new(IncludeError::FileRead{path, err});
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		}
 		if let (Err(..), path) = ctx.assemble(data.as_ref(), path)
 		{
 			let source = Box::new(IncludeError::AssemblyFailed{path});
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		}
 		Ok(())

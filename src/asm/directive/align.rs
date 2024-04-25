@@ -24,12 +24,17 @@ impl Directive for Align
 		if ctx.active().is_none()
 		{
 			let source = Box::new(AlignError::Inactive);
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		}
-		if args.value.len() != 1
+		const NUM_ARGS: usize = 1;
+		if args.value.len() != NUM_ARGS
 		{
-			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+			let dir = self.get_name().to_owned();
+			ctx.push_error(args.convert(
+				if args.value.len() < NUM_ARGS {DirectiveErrorKind::NotEnoughArguments{dir, need: NUM_ARGS, have: args.value.len()}}
+				else {DirectiveErrorKind::TooManyArguments{dir, max: NUM_ARGS, have: args.value.len()}}
+			));
 			return Err(ErrorLevel::Trivial);
 		}
 		match evaluate(&mut args.value[0], ctx)
@@ -38,12 +43,12 @@ impl Directive for Align
 			Ok(Evaluation::Deferred{cause, ..}) =>
 			{
 				let source = Box::new(ConstantError::NotFound{name: cause.into_owned(), realm: Realm::Local});
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},
 			Err(e) =>
 			{
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source: Box::new(e)}));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source: Box::new(e)}));
 				return Err(ErrorLevel::Fatal);
 			},
 		}
@@ -59,14 +64,15 @@ impl Directive for Align
 					_ =>
 					{
 						let source = Box::new(AlignError::Range(val));
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 				}
 			},
 			ref arg =>
 			{
-				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have: arg.get_type()}));
+			let dir = self.get_name().to_owned();
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::Constant, have: arg.get_type()}));
 				return Err(ErrorLevel::Trivial);
 			},
 		};
@@ -81,7 +87,7 @@ impl Directive for Align
 					if !active.has_remaining(new_len)
 					{
 						let source = Box::new(AlignError::Write(SegmentError::Overflow{need: new_len, have: active.remaining()}));
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					}
 					for p in (0..new_len).step_by(256)
@@ -91,7 +97,7 @@ impl Directive for Align
 						if let Err(e) = result
 						{
 							let source = Box::new(AlignError::Write(e));
-							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 							return Err(ErrorLevel::Fatal);
 						}
 					}
@@ -99,7 +105,7 @@ impl Directive for Align
 				Err(..) =>
 				{
 					let source = Box::new(AlignError::Overflow{need: len - off, have: active.remaining()});
-					ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 					return Err(ErrorLevel::Fatal);
 				},
 			}

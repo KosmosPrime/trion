@@ -79,9 +79,10 @@ pub type DirectiveError = Positioned<DirectiveErrorKind>;
 pub enum DirectiveErrorKind
 {
 	NotFound(String),
-	ArgumentCount{min: Option<usize>, max: Option<usize>, have: usize},
-	Argument{idx: usize, expect: ArgumentType, have: ArgumentType},
-	Apply{name: String, source: Box<dyn Error + 'static>},
+	TooManyArguments{dir: String, max: usize, have: usize},
+	NotEnoughArguments{dir: String, need: usize, have: usize},
+	ArgumentType{dir: String, idx: usize, expect: ArgumentType, have: ArgumentType},
+	Apply{dir: String, source: Box<dyn Error + 'static>},
 }
 
 impl fmt::Display for DirectiveErrorKind
@@ -90,21 +91,11 @@ impl fmt::Display for DirectiveErrorKind
 	{
 		match self
 		{
-			Self::NotFound(name) => write!(f, "no such directive \".{}\"", name.escape_debug()),
-			Self::ArgumentCount{min, max, have} =>
-			{
-				f.write_str("invalid argument count (")?;
-				match (*min, *max)
-				{
-					(None, None) => (),
-					(None, Some(max)) => write!(f, "at most{max}, ")?,
-					(Some(min), None) => write!(f, "at least {min}, ")?,
-					(Some(min), Some(max)) => write!(f, "need {min} to {max}, ")?,
-				}
-				write!(f, "got {have})")
-			},
-			Self::Argument{idx, expect, have} => write!(f, "invalid argument #{idx} (expect {expect}, got {have})"),
-			Self::Apply{name, ..} => write!(f, "failed to apply .{name}"),
+			Self::NotFound(dir) => write!(f, "no such directive \".{}\"", dir.escape_debug()),
+			Self::TooManyArguments{dir, max, have} => write!(f, "too many arguments for \".{}\" (max {max}, have {have})", dir.escape_debug()),
+			Self::NotEnoughArguments{dir, need, have} => write!(f, "not enough arguments for\".{}\" (need {need}, have {have})", dir.escape_debug()),
+			Self::ArgumentType{dir, idx, expect, have} => write!(f, "invalid argument #{idx} to \".{}\" (expect {expect}, got {have})", dir.escape_debug()),
+			Self::Apply{dir, ..} => write!(f, "failed to apply .{dir}"),
 		}
 	}
 }

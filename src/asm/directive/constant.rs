@@ -21,9 +21,14 @@ impl Directive for Const
 	
 	fn apply(&self, ctx: & mut Context, mut args: Positioned<Vec<Argument>>) -> Result<(), ErrorLevel>
 	{
-		if args.value.len() != 2
+		const NUM_ARGS: usize = 2;
+		if args.value.len() != NUM_ARGS
 		{
-			ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(2), max: Some(2), have: v.len()}));
+			let dir = self.get_name().to_owned();
+			ctx.push_error(args.convert(
+				if args.value.len() < NUM_ARGS {DirectiveErrorKind::NotEnoughArguments{dir, need: NUM_ARGS, have: args.value.len()}}
+				else {DirectiveErrorKind::TooManyArguments{dir, max: NUM_ARGS, have: args.value.len()}}
+			));
 			return Err(ErrorLevel::Trivial);
 		}
 		match args.value[0].get_type()
@@ -31,7 +36,8 @@ impl Directive for Const
 			ArgumentType::Identifier => (),
 			have =>
 			{
-				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Identifier, have}));
+				let dir = self.get_name().to_owned();
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::Identifier, have}));
 				return Err(ErrorLevel::Trivial);
 			},
 		}
@@ -41,12 +47,12 @@ impl Directive for Const
 			Ok(Evaluation::Deferred{cause, ..}) =>
 			{
 				let source = Box::new(ConstantError::NotFound{name: cause.into_owned(), realm: Realm::Local});
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},
 			Err(e) =>
 			{
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source: Box::new(e)}));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source: Box::new(e)}));
 				return Err(ErrorLevel::Fatal);
 			},
 		}
@@ -56,7 +62,8 @@ impl Directive for Const
 			Argument::Constant(Number::Integer(v)) => v,
 			ref arg =>
 			{
-				ctx.push_error(args.convert(DirectiveErrorKind::Argument{idx: 1, expect: ArgumentType::Constant, have: arg.get_type()}));
+				let dir = self.get_name().to_owned();
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 1, expect: ArgumentType::Constant, have: arg.get_type()}));
 				return Err(ErrorLevel::Trivial);
 			},
 		};
@@ -66,7 +73,7 @@ impl Directive for Const
 			Err(ConstantError::Duplicate{name, ..}) =>
 			{
 				let source = Box::new(ConstError::Duplicate(name));
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},
 			Err(e) => unreachable!("{e:?}"),

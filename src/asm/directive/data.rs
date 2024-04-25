@@ -41,7 +41,7 @@ impl<'l> DataExpr<'l>
 	
 	fn push_error<E: Error + 'static>(&mut self, ctx: &mut Context, source: E)
 	{
-		self.push_error_raw(ctx, DirectiveErrorKind::Apply{name: self.dir_name.to_owned(), source: Box::new(source)});
+		self.push_error_raw(ctx, DirectiveErrorKind::Apply{dir: self.dir_name.to_owned(), source: Box::new(source)});
 	}
 	
 	fn push_error_raw(&mut self, ctx: &mut Context, err: DirectiveErrorKind)
@@ -168,14 +168,19 @@ macro_rules!generate_expr
 					None =>
 					{
 						let source = Box::new(DataError::Inactive);
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: $label.to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 					Some(seg) => seg.curr_addr(),
 				};
-				if args.value.len() != 1
+				const NUM_ARGS: usize = 1;
+				if args.value.len() != NUM_ARGS
 				{
-					ctx.push_error(args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+					let dir = self.get_name().to_owned();
+					ctx.push_error(args.convert(
+						if args.value.len() < NUM_ARGS {DirectiveErrorKind::NotEnoughArguments{dir, need: NUM_ARGS, have: args.value.len()}}
+						else {DirectiveErrorKind::TooManyArguments{dir, max: NUM_ARGS, have: args.value.len()}}
+					));
 					return Err(ErrorLevel::Trivial);
 				}
 				let mut data = DataExpr::new($label, args.line, args.col, addr, args.value.pop().unwrap(), |ctx, data|
@@ -196,8 +201,9 @@ macro_rules!generate_expr
 						},
 						ref arg =>
 						{
+							let dir = $label.to_owned();
 							let have = arg.get_type();
-							data.push_error_raw(ctx, DirectiveErrorKind::Argument{idx: 0, expect: ArgumentType::Constant, have});
+							data.push_error_raw(ctx, DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::Constant, have});
 							Err(ErrorLevel::Trivial)
 						},
 					}
@@ -242,19 +248,24 @@ macro_rules!generate
 				else
 				{
 					let source = Box::new(DataError::Inactive);
-					$ctx.push_error($args.convert(DirectiveErrorKind::Apply{name: $self.get_name().to_owned(), source}));
+					$ctx.push_error($args.convert(DirectiveErrorKind::Apply{dir: $label.to_owned(), source}));
 					return Err(ErrorLevel::Fatal);
 				};
-				if $args.value.len() != 1
+				const NUM_ARGS: usize = 1;
+				if $args.value.len() != NUM_ARGS
 				{
-					$ctx.push_error($args.convert_fn(|v| DirectiveErrorKind::ArgumentCount{min: Some(1), max: Some(1), have: v.len()}));
+					let dir = $label.to_owned();
+					$ctx.push_error($args.convert(
+						if $args.value.len() < NUM_ARGS {DirectiveErrorKind::NotEnoughArguments{dir, need: NUM_ARGS, have: $args.value.len()}}
+						else {DirectiveErrorKind::TooManyArguments{dir, max: NUM_ARGS, have: $args.value.len()}}
+					));
 					return Err(ErrorLevel::Trivial);
 				}
 				let $value = generate!(@impl($self) $($argt)+ = $args[0], $ctx, $active);
 				if let Err(e) = {$($write)+}
 				{
 					let source = Box::new(DataError::Write(e));
-					$ctx.push_error($args.convert(DirectiveErrorKind::Apply{name: $self.get_name().to_owned(), source}));
+					$ctx.push_error($args.convert(DirectiveErrorKind::Apply{dir: $label.to_owned(), source}));
 					return Err(ErrorLevel::Fatal);
 				}
 				Ok(())
@@ -268,7 +279,8 @@ macro_rules!generate
 			Argument::String(ref string) => string.as_ref(),
 			ref arg =>
 			{
-				let err = DirectiveErrorKind::Argument{idx: $idx, expect: ArgumentType::String, have: arg.get_type()};
+				let dir = $self.get_name().to_owned();
+				let err = DirectiveErrorKind::ArgumentType{dir, idx: $idx, expect: ArgumentType::String, have: arg.get_type()};
 				$ctx.push_error($args.convert(err));
 				return Err(ErrorLevel::Trivial);
 			},
@@ -289,7 +301,7 @@ generate!
 				None =>
 				{
 					let source = Box::new(DataError::HexChar{pos, value: c});
-					ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+					ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 					return Err(ErrorLevel::Fatal);
 				},
 				Some(v) =>
@@ -310,7 +322,7 @@ generate!
 		if carry.is_some()
 		{
 			let source = Box::new(DataError::HexEof);
-			ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+			ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 			return Err(ErrorLevel::Fatal);
 		}
 		active.write(out_data.as_slice())
@@ -340,7 +352,7 @@ generate!
 								if !active.has_remaining(len)
 								{
 									let source = Box::new(DataError::Write(SegmentError::Overflow{need: len, have: active.remaining()}));
-									ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 									return Err(ErrorLevel::Fatal);
 								}
 								len
@@ -348,7 +360,7 @@ generate!
 							Err(..) =>
 							{
 								let source = Box::new(DataError::Write(SegmentError::Overflow{need: usize::MAX, have: active.remaining()}));
-								ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+								ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 								return Err(ErrorLevel::Fatal);
 							},
 						}
@@ -356,7 +368,7 @@ generate!
 					Err(e) =>
 					{
 						let source = Box::new(DataError::File(e));
-						ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+						ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 						return Err(ErrorLevel::Fatal);
 					},
 				};
@@ -374,7 +386,7 @@ generate!
 								if let Err(e) = active.write(&temp[..len - pos])
 								{
 									let source = Box::new(DataError::Write(e));
-									ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 									return Err(ErrorLevel::Fatal);
 								}
 								// no need to update pos again
@@ -386,7 +398,7 @@ generate!
 								if let Err(e) = active.write(&temp[..cnt])
 								{
 									let source = Box::new(DataError::Write(e));
-									ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+									ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 									return Err(ErrorLevel::Fatal);
 								}
 								pos += cnt;
@@ -395,7 +407,7 @@ generate!
 						Err(e) =>
 						{
 							let source = Box::new(DataError::File(e));
-							ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+							ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 							return Err(ErrorLevel::Fatal);
 						},
 					}
@@ -407,7 +419,7 @@ generate!
 			Err(e) =>
 			{
 				let source = Box::new(DataError::File(e));
-				ctx.push_error(args.convert(DirectiveErrorKind::Apply{name: self.get_name().to_owned(), source}));
+				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},
 		}
@@ -437,7 +449,7 @@ impl fmt::Display for DataError
 			&Self::HexChar{pos, value} => write!(f, "invalid hex char {value:?} at {pos}"),
 			Self::HexEof => f.write_str("unexpected eof in hex string"),
 			Self::File(..) => f.write_str("could not access referenced file"),
-			Self::Write(..) => f.write_str("could not write segment"),
+			Self::Write(..) => f.write_str("could not write data to segment"),
 			Self::Put(..) => f.write_str("could not write data bytes"),
 		}
 	}
