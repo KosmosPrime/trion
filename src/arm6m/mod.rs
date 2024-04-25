@@ -1,7 +1,8 @@
+use core::fmt;
 use std::borrow::Cow;
 use std::error::Error;
 
-use crate::arm6m::asm::{ImmReg, Instruction};
+use crate::arm6m::asm::{ImmReg, Instruction, WriteError};
 use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
@@ -284,7 +285,7 @@ impl<'l> ArmInstr<'l>
 							let Ok(val) = i32::try_from(val)
 							else
 							{
-								self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
 								return Err(ErrorLevel::Trivial);
 							};
 							#[allow(unused_assignments)] // always ignored for final argument
@@ -429,7 +430,7 @@ impl<'l> ArmInstr<'l>
 							let Ok(val) = i32::try_from(val)
 							else
 							{
-								self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
 								return Err(ErrorLevel::Trivial);
 							};
 							#[allow(unused_assignments)] // always ignored for final argument
@@ -691,7 +692,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -729,7 +730,7 @@ impl<'l> ArmInstr<'l>
 				convert!((pm: Identifier));
 				if !pm.eq_ignore_ascii_case("i")
 				{
-					self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 					return Err(ErrorLevel::Trivial);
 				}
 			},
@@ -738,7 +739,7 @@ impl<'l> ArmInstr<'l>
 				convert!((opt: Identifier));
 				if !opt.eq_ignore_ascii_case("SV")
 				{
-					self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 					return Err(ErrorLevel::Trivial);
 				}
 			},
@@ -785,7 +786,7 @@ impl<'l> ArmInstr<'l>
 				{
 					None | Some(ImmReg::Immediate(..)) =>
 					{
-						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 					Some(ImmReg::Register(a_off)) => {(*addr, *off) = (a_addr.0, a_off);},
@@ -811,7 +812,7 @@ impl<'l> ArmInstr<'l>
 				convert!(({*dst}: Register) ({*lhs}: Register) (rhs: Immediate));
 				if rhs != 0
 				{
-					self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+					self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 					return Err(ErrorLevel::Trivial);
 				}
 			},
@@ -832,7 +833,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -848,7 +849,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -861,7 +862,7 @@ impl<'l> ArmInstr<'l>
 					Ok(i) => *info = i,
 					Err(..) =>
 					{
-						self.push_error_raw(ctx, InstrErrorKind::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
+						self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos});
 						return Err(ErrorLevel::Trivial);
 					},
 				}
@@ -936,7 +937,7 @@ impl<'l> ArmInstr<'l>
 					{
 						if let Err(e) = active.write_at(self.addr, &tmp[..len])
 						{
-							self.push_error_raw(ctx, InstrErrorKind::Write(e));
+							self.push_error(ctx, AsmError::Write(e));
 							return Err(ErrorLevel::Fatal);
 						}
 					},
@@ -947,7 +948,7 @@ impl<'l> ArmInstr<'l>
 							Ok(n) => assert_eq!(n, 0), // the active segment has changed, this ensures the bytes have been pre-allocated
 							Err(e) =>
 							{
-								self.push_error_raw(ctx, InstrErrorKind::Write(SegmentError::Write(e)));
+								self.push_error(ctx, AsmError::Write(SegmentError::Write(e)));
 								return Err(ErrorLevel::Fatal);
 							},
 						}
@@ -957,7 +958,7 @@ impl<'l> ArmInstr<'l>
 			},
 			Err(e) =>
 			{
-				self.push_error_raw(ctx, InstrErrorKind::Encode(e));
+				self.push_error(ctx, AsmError::Encode(e));
 				return Err(ErrorLevel::Fatal);
 			},
 		}
@@ -1022,10 +1023,18 @@ fn regl<'l>(name: &'l str, instr: &'l str, idx: usize) -> Result<Register, Instr
 			b"LR" => Ok(Register::LR),
 			b"R15" => Ok(Register::PC),
 			b"PC" => Ok(Register::PC),
-			_ => Err(InstrErrorKind::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()}),
+			_ =>
+			{
+				let source = Box::new(AsmError::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()});
+				Err(InstrErrorKind::Assemble(source))
+			},
 		}
 	}
-	else {Err(InstrErrorKind::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()})}
+	else
+	{
+		let source = Box::new(AsmError::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()});
+		Err(InstrErrorKind::Assemble(source))
+	}
 }
 
 fn sysl<'l>(name: &'l str, instr: &'l str, idx: usize) -> Result<SystemReg, InstrErrorKind>
@@ -1048,10 +1057,18 @@ fn sysl<'l>(name: &'l str, instr: &'l str, idx: usize) -> Result<SystemReg, Inst
 			b"PSP" => Ok(SystemReg::PSP),
 			b"PRIMASK" => Ok(SystemReg::PRIMASK),
 			b"CONTROL" => Ok(SystemReg::CONTROL),
-			_ => Err(InstrErrorKind::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()}),
+			_ =>
+			{
+				let source = Box::new(AsmError::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()});
+				Err(InstrErrorKind::Assemble(source))
+			},
 		}
 	}
-	else {Err(InstrErrorKind::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()})}
+	else
+	{
+		let source = Box::new(AsmError::NoSuchRegister{instr: instr.to_owned(), idx, what: name.to_owned()});
+		Err(InstrErrorKind::Assemble(source))
+	}
 }
 
 fn regset<'l>(items: &Vec<Argument<'l>>, instr: &'l str, idx: usize) -> Result<RegisterSet, InstrErrorKind>
@@ -1090,13 +1107,58 @@ fn addr_off<'l>(addr: &Argument<'l>, instr: &'l str, idx: usize) -> Result<(Regi
 					let Ok(off) = i32::try_from(off)
 					else
 					{
-						return Err(InstrErrorKind::ValueRange{instr: instr.to_owned(), idx});
+						let source = Box::new(AsmError::ValueRange{instr: instr.to_owned(), idx});
+						return Err(InstrErrorKind::Assemble(source));
 					};
 					Ok((regl(addr.as_ref(), instr, idx)?, Some(ImmReg::Immediate(off))))
 				},
-				_ => return Err(InstrErrorKind::ValueRange{instr: instr.to_owned(), idx}),
+				_ =>
+				{
+					let source = Box::new(AsmError::ValueRange{instr: instr.to_owned(), idx});
+					return Err(InstrErrorKind::Assemble(source));
+				},
 			}
 		},
-		_ => return Err(InstrErrorKind::ValueRange{instr: instr.to_owned(), idx}),
+		_ =>
+		{
+			let source = Box::new(AsmError::ValueRange{instr: instr.to_owned(), idx});
+			return Err(InstrErrorKind::Assemble(source));
+		},
+	}
+}
+
+#[derive(Debug)]
+pub enum AsmError
+{
+	ValueRange{instr: String, idx: usize},
+	NoSuchRegister{instr: String, idx: usize, what: String},
+	Encode(WriteError),
+	Write(SegmentError),
+}
+
+impl fmt::Display for AsmError
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+	{
+		match self
+		{
+			Self::ValueRange{instr, idx} => write!(f, "argument #{idx} for {instr} is out of range"),
+			Self::NoSuchRegister{instr, idx, what} => write!(f, "argument #{idx} for {instr} has invalid register {what:?}"),
+			Self::Encode(..) => f.write_str("could not encode instruction"),
+			Self::Write(..) => f.write_str("could not write instruction to segment"),
+		}
+	}
+}
+
+impl Error for AsmError
+{
+	fn source(&self) -> Option<&(dyn Error + 'static)>
+	{
+		match self
+		{
+			Self::Encode(e) => Some(e),
+			Self::Write(e) => Some(e),
+			_ => None,
+		}
 	}
 }
