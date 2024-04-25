@@ -8,7 +8,6 @@ use std::io::{self, Read};
 use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
 use crate::asm::constant::Realm;
 use crate::asm::directive::{Directive, DirectiveErrorKind};
-use crate::asm::memory::map::PutError;
 use crate::asm::simplify::{evaluate, EvalError, Evaluation};
 use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ArgumentType};
@@ -111,7 +110,7 @@ impl<'l> DataExpr<'l>
 					Ok(n) => assert_eq!(n, 0), // the active segment has changed, this ensures the bytes have been pre-allocated
 					Err(e) =>
 					{
-						self.push_error(ctx, DataError::Put(e));
+						self.push_error(ctx, DataError::Write(SegmentError::Write(e)));
 						return Err(ErrorLevel::Fatal);
 					},
 				}
@@ -435,7 +434,6 @@ pub enum DataError
 	HexEof,
 	File(io::Error),
 	Write(SegmentError),
-	Put(PutError),
 }
 
 impl fmt::Display for DataError
@@ -450,7 +448,6 @@ impl fmt::Display for DataError
 			Self::HexEof => f.write_str("unexpected eof in hex string"),
 			Self::File(..) => f.write_str("could not access referenced file"),
 			Self::Write(..) => f.write_str("could not write data to segment"),
-			Self::Put(..) => f.write_str("could not write data bytes"),
 		}
 	}
 }

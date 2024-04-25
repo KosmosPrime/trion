@@ -3,7 +3,6 @@ use std::error::Error;
 
 use crate::arm6m::asm::WriteError;
 use crate::asm::{Context, ErrorLevel, SegmentError};
-use crate::asm::memory::map::PutError;
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 
@@ -27,7 +26,6 @@ pub enum InstrErrorKind
 	NoSuchRegister{instr: String, idx: usize, what: String},
 	Encode(WriteError),
 	Write(SegmentError),
-	Put(PutError),
 	Assemble(Box<dyn Error>),
 }
 
@@ -45,7 +43,6 @@ impl fmt::Display for InstrErrorKind
 			Self::NoSuchRegister{instr, idx, what} => write!(f, "argument #{idx} for {instr} has invalid register {what:?}"),
 			Self::Encode(..) => f.write_str("could not encode instruction"),
 			Self::Write(..) => f.write_str("could not write instruction to segment"),
-			Self::Put(..) => f.write_str("could not write instruction bytes"),
 			Self::Assemble(..) => f.write_str("instruction assembly failed"),
 		}
 	}
@@ -59,7 +56,6 @@ impl Error for InstrErrorKind
 		{
 			Self::Encode(e) => Some(e),
 			Self::Write(e) => Some(e),
-			Self::Put(e) => Some(e),
 			Self::Assemble(e) => Some(e.as_ref()),
 			_ => None,
 		}

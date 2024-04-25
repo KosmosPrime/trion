@@ -482,7 +482,7 @@ impl fmt::Display for SegmentError
 	{
 		match self
 		{
-			Self::Write(..) => f.write_str("could not write complete segment"),
+			Self::Write(..) => f.write_str("could not write segment"),
 			Self::Occupied(addr) => write!(f, "address {addr:08X} is already occupied"),
 			Self::Overflow{need, have} => write!(f, "segment overflow (need {need}, capacity {have})"),
 		}

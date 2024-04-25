@@ -6,7 +6,7 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
-use crate::asm::{ConstantError, Context, ErrorLevel};
+use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
 use crate::asm::constant::{Lookup, Realm};
 use crate::asm::instr::{InstrErrorKind, InstructionError, InstructionSet};
 use crate::asm::simplify::{evaluate, EvalError, Evaluation};
@@ -947,7 +947,7 @@ impl<'l> ArmInstr<'l>
 							Ok(n) => assert_eq!(n, 0), // the active segment has changed, this ensures the bytes have been pre-allocated
 							Err(e) =>
 							{
-								self.push_error_raw(ctx, InstrErrorKind::Put(e));
+								self.push_error_raw(ctx, InstrErrorKind::Write(SegmentError::Write(e)));
 								return Err(ErrorLevel::Fatal);
 							},
 						}
