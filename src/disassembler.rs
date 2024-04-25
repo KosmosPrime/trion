@@ -16,7 +16,7 @@ pub fn disassemble(input: &[u8], base: u32)
 			let mut pos = (start - base) as usize;
 			while pos < input.len()
 			{
-				let result = Instruction::read(&input[pos..]).unwrap();
+				let result = Instruction::decode(&input[pos..]).unwrap();
 				let addr = base + pos as u32;
 				queries.remove(&addr);
 				if let Some(dst) = result.1.get_branch(addr)

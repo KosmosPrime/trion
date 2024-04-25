@@ -2,7 +2,7 @@ use core::fmt;
 use std::borrow::Cow;
 use std::error::Error;
 
-use crate::arm6m::asm::{ImmReg, Instruction, WriteError};
+use crate::arm6m::asm::{ImmReg, Instruction, EncodeError};
 use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
@@ -923,7 +923,7 @@ impl<'l> ArmInstr<'l>
 	fn write_instr(&mut self, ctx: &mut Context, deferred: bool) -> Result<(), ErrorLevel>
 	{
 		let mut tmp = [0u8; 4];
-		match self.instr.write(&mut tmp)
+		match self.instr.encode(&mut tmp)
 		{
 			Ok(len) =>
 			{
@@ -1132,7 +1132,7 @@ pub enum AsmError
 {
 	ValueRange{instr: String, idx: usize},
 	NoSuchRegister{instr: String, idx: usize, what: String},
-	Encode(WriteError),
+	Encode(EncodeError),
 	Write(SegmentError),
 }
 
