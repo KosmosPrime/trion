@@ -8,7 +8,7 @@ use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
 use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
-use crate::asm::constant::{Lookup, Realm};
+use crate::asm::constant::Realm;
 use crate::asm::instr::{InstrErrorKind, InstructionError, InstructionSet};
 use crate::asm::simplify::{evaluate, EvalError, Evaluation};
 use crate::text::{PosNamed, Positioned};
@@ -27,10 +27,10 @@ enum AsmOp<'c>
 	Deferred{cause: Cow<'c, str>},
 }
 
-enum AddrLabel<'l>
+enum AddrOffset
 {
 	Address(Register, Option<ImmReg>),
-	Label(&'l str),
+	Offset(u32),
 }
 
 pub struct Arm6M;
@@ -558,36 +558,102 @@ impl<'l> ArmInstr<'l>
 					}
 				}
 			};
-			(@impl/get AddrLabel) =>
+			(@impl/get Offset) =>
 			{
 				{
-					let addr = match self.args[arg_pos]
+					let arg = &mut self.args[arg_pos];
+					if self.args_done <= arg_pos
 					{
-						Argument::Address(ref mut addr) =>
+						match evaluate(arg, ctx)
 						{
-							if self.args_done <= arg_pos
+							Ok(Evaluation::Complete{..}) => (),
+							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
+							Err(e) =>
 							{
-								match evaluate(addr.as_mut(), ctx)
+								if local
 								{
-									Ok(Evaluation::Complete{..}) => (),
-									Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
-									Err(e) =>
+									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										if local
-										{
-											if let EvalError::NoSuchVariable{name, ..} = e
-											{
-												return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
-											}
-										}
-										self.push_error(ctx, e);
-										return Err(ErrorLevel::Trivial);
-									},
+										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+									}
 								}
-								self.args_done = arg_pos + 1;
-							}
-							
-							let (addr, off) = match addr_off(&*addr, instr_name, arg_pos + 1)
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
+							},
+						}
+						self.args_done = arg_pos + 1;
+					}
+					match *arg
+					{
+						Argument::Constant(Number::Integer(val)) =>
+						{
+							let Ok(val) = u32::try_from(val)
+							else
+							{
+								self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								return Err(ErrorLevel::Trivial);
+							};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							val
+						},
+						ref arg =>
+						{
+							let have = arg.get_type();
+							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
+							{
+								instr: instr_name.to_owned(),
+								idx: arg_pos + 1,
+								expect: ArgumentType::Constant,
+								have,
+							});
+							return Err(ErrorLevel::Trivial);
+						},
+					}
+				}
+			};
+			(@impl/get AddrOffset) =>
+			{
+				{
+					let arg = &mut self.args[arg_pos];
+					if self.args_done <= arg_pos
+					{
+						match evaluate(arg, ctx)
+						{
+							Ok(Evaluation::Complete{..}) => (),
+							Ok(Evaluation::Deferred{cause, ..}) => return Ok(AsmOp::Deferred{cause}),
+							Err(e) =>
+							{
+								if local
+								{
+									if let EvalError::NoSuchVariable{name, ..} = e
+									{
+										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+									}
+								}
+								self.push_error(ctx, e);
+								return Err(ErrorLevel::Trivial);
+							},
+						}
+						self.args_done = arg_pos + 1;
+					}
+					match *arg
+					{
+						Argument::Constant(Number::Integer(val)) =>
+						{
+							let Ok(val) = u32::try_from(val)
+							else
+							{
+								self.push_error(ctx, AsmError::ValueRange{instr: instr_name.to_owned(), idx: arg_pos + 1});
+								return Err(ErrorLevel::Trivial);
+							};
+							#[allow(unused_assignments)] // always ignored for final argument
+							{arg_pos += 1;}
+							AddrOffset::Offset(val)
+						},
+						Argument::Address(ref addr) =>
+						{
+							let (addr, off) = match addr_off(addr.as_ref(), instr_name, arg_pos + 1)
 							{
 								Ok((a, o)) => (a, o),
 								Err(e) =>
@@ -598,33 +664,20 @@ impl<'l> ArmInstr<'l>
 							};
 							#[allow(unused_assignments)] // always ignored for final argument
 							{arg_pos += 1;}
-							Some((addr, off))
+							AddrOffset::Address(addr, off)
 						},
-						Argument::Identifier(..) => None,
 						ref arg =>
 						{
 							let have = arg.get_type();
-							// REM should indicate that an address would also work
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								expect: ArgumentType::Identifier,
+								expect: ArgumentType::Address,
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
 						},
-					};
-					match addr
-					{
-						None =>
-						{
-							let Argument::Identifier(ref ident) = self.args[arg_pos] else {unreachable!()};
-							#[allow(unused_assignments)] // always ignored for final argument
-							{arg_pos += 1;}
-							AddrLabel::Label(ident.as_ref())
-						},
-						Some((addr, off)) => AddrLabel::Address(addr, off),
 					}
 				}
 			};
@@ -637,56 +690,50 @@ impl<'l> ArmInstr<'l>
 			Instruction::Add{dst, lhs, rhs, ..} => {convert!(({*dst}: Register) ({*lhs}: Register) ({*rhs}: ImmReg));},
 			Instruction::Adr{dst, off} =>
 			{
-				convert!(({*dst}: Register) (label: Identifier));
-				let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
+				convert!(({*dst}: Register) (tgt: Offset));
+				let al_pc = (self.addr & !0b11).wrapping_add(4);
+				if tgt < al_pc || tgt - al_pc > 0xFF << 2
 				{
-					let al_pc = (self.addr & !0b11).wrapping_add(4);
-					if tgt < al_pc || tgt - al_pc > 0xFF << 2
-					{
-						Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64})
-					}
-					else if ((tgt - al_pc) & 0b11) != 0
-					{
-						Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64})
-					}
-					else {Ok((tgt - al_pc) as u16)}
-				});
-				match r
+					self.push_error(ctx, ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
+					return Err(ErrorLevel::Trivial);
+				}
+				else if ((tgt - al_pc) & 0b11) != 0
 				{
-					Ok(tgt) => *off = tgt,
-					Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
+					self.push_error(ctx, ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
+					return Err(ErrorLevel::Trivial);
+				}
+				else
+				{
+					*off = (tgt - al_pc) as u16;
 				}
 			},
 			Instruction::And{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
 			Instruction::Asr{dst, value, shift} => {convert!(({*dst}: Register) ({*value}: Register) ({*shift}: ImmReg));},
 			&mut Instruction::B{cond, ref mut off} =>
 			{
-				convert!((label: Identifier));
-				let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
+				convert!((tgt: Offset));
+				let pc = self.addr.wrapping_add(4);
+				let off_val = i64::from(tgt) - i64::from(pc);
+				let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
+				if off_val < min || off_val > max
 				{
-					let pc = self.addr.wrapping_add(4);
-					let off_val = i64::from(tgt) - i64::from(pc);
-					let (min, max) = if cond == Condition::Always{(-0b10000000000_0, 0b01111111111_0)} else {(-0b10000000_0, 0b01111111_0)};
-					if off_val < min || off_val > max
-					{
-						return Err(ConstantError::Range{min, max, have: off_val});
-					}
-					else if (off_val & 0b1) != 0
-					{
-						return Err(ConstantError::Alignment{align: 0b10, have: off_val});
-					}
-					else {Ok(off_val as i32)}
-				});
-				match r
+					self.push_error(ctx, ConstantError::Range{min, max, have: off_val});
+					return Err(ErrorLevel::Trivial);
+				}
+				else if (off_val & 0b1) != 0
 				{
-					Ok(tgt) => *off = tgt,
-					Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
+					self.push_error(ctx, ConstantError::Alignment{align: 0b10, have: off_val});
+					return Err(ErrorLevel::Trivial);
+				}
+				else
+				{
+					*off = off_val as i32;
 				}
 			},
 			Instruction::Bic{dst, rhs} => {convert!(({*dst}: Register) ({*rhs}: Register));},
 			Instruction::Bkpt{info} =>
 			{
-				convert!((a_info: Immediate));
+				convert!((a_info: Offset));
 				match u8::try_from(a_info)
 				{
 					Ok(i) => *info = i,
@@ -699,26 +746,23 @@ impl<'l> ArmInstr<'l>
 			},
 			Instruction::Bl{off} =>
 			{
-				convert!((label: Identifier));
-				let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
+				convert!((tgt: Offset));
+				let pc = self.addr.wrapping_add(4);
+				let off_val = i64::from(tgt) - i64::from(pc);
+				let (min, max) = (-1 << 24, (1 << 24) - 1);
+				if off_val < min || off_val > max
 				{
-					let pc = self.addr.wrapping_add(4);
-					let off_val = i64::from(tgt) - i64::from(pc);
-					let (min, max) = (-1 << 24, (1 << 24) - 1);
-					if off_val < min || off_val > max
-					{
-						return Err(ConstantError::Range{min, max, have: off_val});
-					}
-					else if (off_val & 0b1) != 0
-					{
-						return Err(ConstantError::Alignment{align: 0b10, have: off_val});
-					}
-					else {Ok(off_val as i32)}
-				});
-				match r
+					self.push_error(ctx, ConstantError::Range{min, max, have: off_val});
+					return Err(ErrorLevel::Trivial);
+				}
+				else if (off_val & 0b1) != 0
 				{
-					Ok(tgt) => *off = tgt,
-					Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
+					self.push_error(ctx, ConstantError::Alignment{align: 0b10, have: off_val});
+					return Err(ErrorLevel::Trivial);
+				}
+				else
+				{
+					*off = off_val as i32;
 				}
 			},
 			Instruction::Blx{off} => {convert!(({*off}: Register));},
@@ -747,29 +791,27 @@ impl<'l> ArmInstr<'l>
 			Instruction::Ldm{addr, registers} => {convert!(({*addr}: Register) ({*registers}: RegSet));},
 			Instruction::Ldr{dst, addr, off} =>
 			{
-				convert!(({*dst}: Register) (a_addr: AddrLabel));
+				convert!(({*dst}: Register) (a_addr: AddrOffset));
 				match a_addr
 				{
-					AddrLabel::Address(a_addr, a_off) => {(*addr, *off) = (a_addr, a_off.unwrap_or(ImmReg::Immediate(0)));},
-					AddrLabel::Label(label) =>
+					AddrOffset::Address(a_addr, a_off) => {(*addr, *off) = (a_addr, a_off.unwrap_or(ImmReg::Immediate(0)));},
+					AddrOffset::Offset(tgt) =>
 					{
-						let r = Self::reduce_label(ctx, &mut self.file_name, self.line, self.col, label, |tgt|
+						let al_pc = (self.addr & !0b11).wrapping_add(4);
+						if tgt < al_pc || tgt - al_pc > 0xFF << 2
 						{
-							let al_pc = (self.addr & !0b11).wrapping_add(4);
-							if tgt < al_pc || tgt - al_pc > 0xFF << 2
-							{
-								return Err(ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
-							}
-							else if ((tgt - al_pc) & 0b11) != 0
-							{
-								return Err(ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
-							}
-							else {Ok(ImmReg::Immediate((tgt - al_pc) as i32))}
-						});
-						match r
+							self.push_error(ctx, ConstantError::Range{min: 0, max: 0xFF << 2, have: tgt as i64 - al_pc as i64});
+							return Err(ErrorLevel::Trivial);
+						}
+						else if ((tgt - al_pc) & 0b11) != 0
 						{
-							Ok(tgt) => (*addr, *off) = (Register::PC, tgt),
-							Err(r) => return r.map(Err).unwrap_or_else(|| Ok(AsmOp::Deferred{cause: Cow::Borrowed(label)})),
+							self.push_error(ctx, ConstantError::Alignment{align: 0b100, have: (tgt - al_pc) as i64});
+							return Err(ErrorLevel::Trivial);
+						}
+						else
+						{
+							*addr = Register::PC;
+							*off = ImmReg::Immediate((tgt - al_pc) as i32);
 						}
 					},
 				}
@@ -874,50 +916,6 @@ impl<'l> ArmInstr<'l>
 			Instruction::Yield => {convert!();},
 		};
 		Ok(AsmOp::Completed)
-	}
-	
-	fn reduce_label<T, E: Error + 'static>(ctx: &mut Context, file_name: &mut Option<String>, line: u32, col: u32, label: &str,
-		func: impl FnOnce(u32) -> Result<T, E>) -> Result<T, Option<ErrorLevel>>
-	{
-		let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
-		if let Lookup::Found(have) = ctx.get_constant(label, realm)
-		{
-			match u32::try_from(have)
-			{
-				Ok(tgt) =>
-				{
-					match func(tgt)
-					{
-						Ok(v) => Ok(v),
-						Err(e) =>
-						{
-							let file_name = file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned()))
-								.unwrap_or_else(|| "<unknown>".to_owned());
-							let err = InstrErrorKind::Assemble(Box::new(e));
-							ctx.push_error_in(PosNamed{name: file_name, line, col, value: err});
-							Err(Some(ErrorLevel::Trivial))
-						},
-					}
-				},
-				Err(..) =>
-				{
-					let file_name = file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned()))
-						.unwrap_or_else(|| "<unknown>".to_owned());
-					let err = InstrErrorKind::Assemble(Box::new(ConstantError::Range{min: 0, max: i64::from(u32::MAX), have}));
-					ctx.push_error_in(PosNamed{name: file_name, line, col, value: err});
-					Err(Some(ErrorLevel::Trivial))
-				},
-			}
-		}
-		else if realm == Realm::Global
-		{
-			// we've reached the end of the stack, this label won't be defined
-			let file_name = file_name.take().unwrap(); // both no `self.curr_path()` and `ArmInstr::file` should be set in global scope
-			let err = InstrErrorKind::Assemble(Box::new(ConstantError::NotFound{name: label.to_owned(), realm}));
-			ctx.push_error_in(PosNamed{name: file_name, line, col, value: err});
-			Err(Some(ErrorLevel::Trivial))
-		}
-		else {Err(None)}
 	}
 	
 	fn write_instr(&mut self, ctx: &mut Context, deferred: bool) -> Result<(), ErrorLevel>
