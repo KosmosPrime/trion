@@ -42,7 +42,7 @@ impl Directive for Align
 			Ok(Evaluation::Complete{..}) => (),
 			Ok(Evaluation::Deferred{cause, ..}) =>
 			{
-				let source = Box::new(ConstantError::NotFound{name: cause.into_owned(), realm: Realm::Local});
+				let source = Box::new(ConstantError::NotFound{name: cause.as_ref().to_owned(), realm: Realm::Local});
 				ctx.push_error(args.convert(DirectiveErrorKind::Apply{dir: self.get_name().to_owned(), source}));
 				return Err(ErrorLevel::Fatal);
 			},

@@ -1,5 +1,4 @@
 use core::fmt;
-use std::borrow::Cow;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use crate::arm6m::cond::Condition;
 use crate::arm6m::reg::Register;
 use crate::arm6m::regset::RegisterSet;
 use crate::arm6m::sysreg::SystemReg;
+use crate::asm::arcob::Arcob;
 use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
 use crate::asm::constant::Realm;
 use crate::asm::instr::{InstrErrorKind, InstructionError, InstructionSet};
@@ -25,7 +25,7 @@ pub mod regset;
 enum AsmOp<'c>
 {
 	Completed,
-	Deferred{cause: Cow<'c, str>},
+	Deferred{cause: Arcob<'c, str>},
 }
 
 enum AddrOffset
@@ -268,7 +268,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
 									}
 								}
 								self.push_error(ctx, e);
@@ -413,7 +413,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
 									}
 								}
 								self.push_error(ctx, e);
@@ -516,7 +516,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
 									}
 								}
 								self.push_error(ctx, e);
@@ -573,7 +573,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
 									}
 								}
 								self.push_error(ctx, e);
@@ -627,7 +627,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Cow::Owned(name)});
+										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
 									}
 								}
 								self.push_error(ctx, e);
@@ -979,7 +979,7 @@ impl ArmInstr<'static>
 				{
 					if global
 					{
-						let name = cause.into_owned();
+						let name = cause.as_ref().to_owned();
 						self.push_error(ctx, ConstantError::NotFound{name, realm: Realm::Global});
 						return Err(ErrorLevel::Trivial);
 					}

@@ -117,7 +117,7 @@ fn simplify_str()
 		{
 			let Argument::BitAnd{ref lhs, ref rhs} = v else {panic!("structure error, got {v:?}")};
 			assert!(matches!(**lhs, Argument::Constant(Number::Integer(3))), "{lhs:?}");
-			assert!(matches!(**rhs, Argument::String(ref s) if s == "order"), "{rhs:?}");
+			assert!(matches!(**rhs, Argument::String(ref s) if s.as_ref() == "order"), "{rhs:?}");
 			assert!(matches!(e, SimplifyError::BadType{kind: ArgumentType::String, op: ArgumentType::BitAnd}), "{v:?} -> {e:?}");
 		},
 		"[\"insane\"]" => {Err(v, e)} in
@@ -137,13 +137,13 @@ fn simplify_addsub()
 			assert!(changed);
 			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			assert!(matches!(**lhs, Argument::Constant(Number::Integer(5))), "{lhs:?}");
-			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s == "pre"), "{rhs:?}");
+			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "pre"), "{rhs:?}");
 		},
 		"post + 2 + 3" => {Ok(val, changed)} in
 		{
 			assert!(changed);
 			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
-			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "post"), "{lhs:?}");
+			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "post"), "{lhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(5))), "{rhs:?}");
 		},
 		"in + 2 + 3 + ner" => {Ok(val, changed)} in
@@ -151,16 +151,16 @@ fn simplify_addsub()
 			assert!(changed);
 			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			let Argument::Add{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{val:?}")};
-			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s == "in"), "{llhs:?}");
+			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "in"), "{llhs:?}");
 			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(5))), "{rlhs:?}");
-			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s == "ner"), "{rhs:?}");
+			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "ner"), "{rhs:?}");
 		},
 		"2 + 3 + outer + 6" => {Ok(val, changed)} in
 		{
 			assert!(changed);
 			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			assert!(matches!(**lhs, Argument::Constant(Number::Integer(11))), "{lhs:?}");
-			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s == "outer"), "{rhs:?}");
+			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "outer"), "{rhs:?}");
 		},
 		"((2 + 3) + 4 - 1)" => {Ok(val, changed)} in
 		{
@@ -180,13 +180,13 @@ fn simplify_addsub()
 			assert!(changed);
 			let Argument::Subtract{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			assert!(matches!(**lhs, Argument::Constant(Number::Integer(-1))), "{lhs:?}");
-			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s == "start"), "{rhs:?}");
+			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "start"), "{rhs:?}");
 		},
 		"start - 2 - 3" => {Ok(val, changed)} in
 		{
 			assert!(changed);
 			let Argument::Subtract{ref lhs, ref rhs} = val else {panic!("{val:?}")};
-			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "start"), "{lhs:?}");
+			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "start"), "{lhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(5))), "{rhs:?}");
 		},
 		"(v0 - 2) + (3 - v1)" => {Ok(val, changed)} in
@@ -194,9 +194,9 @@ fn simplify_addsub()
 			assert!(changed);
 			let Argument::Subtract{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			let Argument::Add{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{lhs:?}")};
-			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s == "v0"), "{llhs:?}");
+			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "v0"), "{llhs:?}");
 			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(1))), "{rlhs:?}");
-			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s == "v1"), "{rhs:?}");
+			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "v1"), "{rhs:?}");
 		},
 	};
 }
@@ -223,9 +223,9 @@ fn simplify_muldiv()
 			const EXPECT: i64 = 7 * 13;
 			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			let Argument::Divide{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{lhs:?}")};
-			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s == "lhs"), "{llhs:?}");
+			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "lhs"), "{llhs:?}");
 			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(EXPECT))), "{rlhs:?}");
-			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s == "rhs"), "{rhs:?}");
+			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "rhs"), "{rhs:?}");
 		},
 		"14 / lhs / rhs / 13" => {Ok(val, changed)} in
 		{
@@ -234,8 +234,8 @@ fn simplify_muldiv()
 			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			let Argument::Divide{lhs: ref llhs, rhs: ref rlhs} = **lhs else {panic!("{lhs:?}")};
 			assert!(matches!(**llhs, Argument::Constant(Number::Integer(EXPECT))), "{llhs:?}");
-			assert!(matches!(rlhs.as_ref(), Argument::Identifier(s) if s == "lhs"), "{rlhs:?}");
-			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s == "rhs"), "{rhs:?}");
+			assert!(matches!(rlhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "lhs"), "{rlhs:?}");
+			assert!(matches!(rhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "rhs"), "{rhs:?}");
 		},
 		"567 % 10" => {Ok(val, changed)} in
 		{
@@ -246,7 +246,7 @@ fn simplify_muldiv()
 		{
 			assert!(changed);
 			let Argument::Modulo{ref lhs, ref rhs} = val else {panic!("{val:?}")};
-			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "value"), "{lhs:?}");
+			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "value"), "{lhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(10))), "{rhs:?}");
 		},
 		"1 / 0" => {Err(v, e)} in
@@ -261,7 +261,7 @@ fn simplify_muldiv()
 		{
 			assert!(!changed);
 			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
-			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "value"), "{lhs:?}");
+			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "value"), "{lhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(0))), "{rhs:?}");
 		},
 		"1 % 0" => {Err(v, e)} in
@@ -330,7 +330,7 @@ fn simplify_expr()
 		{
 			assert!(changed);
 			let Argument::Divide{ref lhs, ref rhs} = val else {panic!("{val:?}")};
-			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "value"), "{lhs:?}");
+			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "value"), "{lhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(8))), "{rhs:?}");
 		},
 	};
@@ -395,25 +395,25 @@ fn evaluate_ok()
 			let Argument::Add{ref lhs, ref rhs} = val else {panic!("{val:?}")};
 			assert!(matches!(**lhs, Argument::Constant(Number::Integer(0x10000003))), "{lhs:?}");
 			let Argument::Multiply{lhs: ref llhs, rhs: ref rlhs} = **rhs else {panic!("{rhs:?}")};
-			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s == "r0"), "{llhs:?}");
+			assert!(matches!(llhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "r0"), "{llhs:?}");
 			assert!(matches!(**rlhs, Argument::Constant(Number::Integer(4))), "{rlhs:?}");
 		},
 		"base + r0 * 4 + 3", ctx => {Ok(val, r)} in
 		{
-			assert!(matches!(r, Evaluation::Deferred{changed: false, cause} if cause == "base"));
+			assert!(matches!(r, Evaluation::Deferred{changed: false, cause} if cause.as_ref() == "base"));
 			let Argument::Add{lhs: ref mid, ref rhs} = val else {panic!("{val:?}")};
 			let Argument::Add{ref lhs, rhs: ref mhs} = **mid else {panic!("{mid:?}")};
-			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "base"), "{lhs:?}");
+			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "base"), "{lhs:?}");
 			let Argument::Multiply{lhs: ref lmhs, rhs: ref rmhs} = **mhs else {panic!("{mhs:?}")};
-			assert!(matches!(lmhs.as_ref(), Argument::Identifier(s) if s == "r0"), "{lmhs:?}");
+			assert!(matches!(lmhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "r0"), "{lmhs:?}");
 			assert!(matches!(**rmhs, Argument::Constant(Number::Integer(4))), "{rmhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(3))), "{rhs:?}");
 		},
 		"paragraph % zero", ctx => {Ok(val, r)} in
 		{
-			assert!(matches!(r, Evaluation::Deferred{changed: true, cause} if cause == "paragraph"));
+			assert!(matches!(r, Evaluation::Deferred{changed: true, cause} if cause.as_ref() == "paragraph"));
 			let Argument::Modulo{ref lhs, ref rhs} = val else {panic!("{val:?}")};
-			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s == "paragraph"), "{lhs:?}");
+			assert!(matches!(lhs.as_ref(), Argument::Identifier(s) if s.as_ref() == "paragraph"), "{lhs:?}");
 			assert!(matches!(**rhs, Argument::Constant(Number::Integer(0))), "{rhs:?}");
 		}
 	};

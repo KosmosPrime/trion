@@ -1,8 +1,8 @@
 use core::fmt;
 use core::ops::BitOr;
-use std::borrow::Cow;
 use std::error::Error;
 
+use crate::asm::arcob::Arcob;
 use crate::asm::Context;
 use crate::asm::simplify::{OverflowError, SimplifyError, simplify_raw};
 use crate::asm::constant::{Lookup, Realm};
@@ -66,7 +66,7 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 pub enum Evaluation<'c>
 {
 	Complete{changed: bool},
-	Deferred{changed: bool, cause: Cow<'c, str>},
+	Deferred{changed: bool, cause: Arcob<'c, str>},
 }
 
 impl<'c> Evaluation<'c>

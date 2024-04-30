@@ -1,9 +1,9 @@
 use core::cmp::Ordering;
 use core::fmt;
 use core::iter::FusedIterator;
-use std::borrow::Cow;
 use std::error::Error;
 
+use crate::asm::arcob::Arcob;
 use crate::text::operator::{BinOp, BinOpGroup};
 use crate::text::Positioned;
 use crate::text::token::{Number, Token, TokenError, Tokenizer, TokenValue};
@@ -16,8 +16,8 @@ mod test;
 pub enum Argument<'l>
 {
 	Constant(Number),
-	Identifier(Cow<'l, str>),
-	String(Cow<'l, str>),
+	Identifier(Arcob<'l, str>),
+	String(Arcob<'l, str>),
 	Add{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
 	Negate(Box<Argument<'l>>),
 	Subtract{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
@@ -32,7 +32,7 @@ pub enum Argument<'l>
 	RightShift{lhs: Box<Argument<'l>>, rhs: Box<Argument<'l>>},
 	Address(Box<Argument<'l>>),
 	Sequence(Vec<Argument<'l>>),
-	Function{name: Cow<'l, str>, args: Vec<Argument<'l>>},
+	Function{name: Arcob<'l, str>, args: Vec<Argument<'l>>},
 }
 
 impl<'l> Argument<'l>
@@ -78,8 +78,8 @@ impl<'l> Argument<'l>
 		match self
 		{
 			Self::Constant(n) => Argument::Constant(n),
-			Self::Identifier(ident) => Argument::Identifier(Cow::Owned(ident.into_owned())),
-			Self::String(value) => Argument::String(Cow::Owned(value.into_owned())),
+			Self::Identifier(ident) => Argument::Identifier(Arcob::Arced(ident.into_arc())),
+			Self::String(value) => Argument::String(Arcob::Arced(value.into_arc())),
 			Self::Add{lhs, rhs} | Self::Subtract{lhs, rhs} | Self::Multiply{lhs, rhs} | Self::Divide{lhs, rhs}
 				| Self::Modulo{lhs, rhs} | Self::BitAnd{lhs, rhs} | Self::BitOr{lhs, rhs} | Self::BitXor{lhs, rhs}
 				| Self::LeftShift{lhs, rhs} | Self::RightShift{lhs, rhs} =>
@@ -113,7 +113,7 @@ impl<'l> Argument<'l>
 				}
 			},
 			Self::Sequence(args) => Argument::Sequence(Self::vec_into_owned(args)),
-			Self::Function{name, args} => Argument::Function{name: Cow::Owned(name.into_owned()), args: Self::vec_into_owned(args)},
+			Self::Function{name, args} => Argument::Function{name: Arcob::Arced(name.into_arc()), args: Self::vec_into_owned(args)},
 		}
 	}
 }
@@ -160,9 +160,9 @@ pub type Element<'l> = Positioned<ElementValue<'l>>;
 #[derive(Clone, Debug)]
 pub enum ElementValue<'l>
 {
-	Label(Cow<'l, str>),
-	Directive{name: Cow<'l, str>, args: Vec<Argument<'l>>},
-	Instruction{name: Cow<'l, str>, args: Vec<Argument<'l>>},
+	Label(Arcob<'l, str>),
+	Directive{name: Arcob<'l, str>, args: Vec<Argument<'l>>},
+	Instruction{name: Arcob<'l, str>, args: Vec<Argument<'l>>},
 }
 
 impl<'l> ElementValue<'l>
@@ -171,9 +171,9 @@ impl<'l> ElementValue<'l>
 	{
 		match self
 		{
-			Self::Label(name) => ElementValue::Label(Cow::Owned(name.into_owned())),
-			Self::Directive{name, args} => ElementValue::Directive{name: Cow::Owned(name.into_owned()), args: Argument::vec_into_owned(args)},
-			Self::Instruction{name, args} => ElementValue::Instruction{name: Cow::Owned(name.into_owned()), args: Argument::vec_into_owned(args)},
+			Self::Label(name) => ElementValue::Label(Arcob::Arced(name.into_arc())),
+			Self::Directive{name, args} => ElementValue::Directive{name: Arcob::Arced(name.into_arc()), args: Argument::vec_into_owned(args)},
+			Self::Instruction{name, args} => ElementValue::Instruction{name: Arcob::Arced(name.into_arc()), args: Argument::vec_into_owned(args)},
 		}
 	}
 }
@@ -226,7 +226,7 @@ impl<'l> Parser<'l>
 					Ok(args) =>
 					{
 						self.next_inner("';'")?;
-						Ok(Element{line, col, value: ElementValue::Directive{name: Cow::Borrowed(name), args}})
+						Ok(Element{line, col, value: ElementValue::Directive{name: Arcob::Borrowed(name), args}})
 					},
 					Err(e) => Err(e),
 				}
@@ -240,7 +240,7 @@ impl<'l> Parser<'l>
 						if matches!(t.value, TokenValue::LabelMark)
 						{
 							drop(self.0.next());
-							return Ok(Element{value: ElementValue::Label(Cow::Borrowed(name)), line, col});
+							return Ok(Element{value: ElementValue::Label(Arcob::Borrowed(name)), line, col});
 						}
 					},
 					Some(Err(..)) => return Err(Positioned{line, col, value: ParseErrorKind::Token(self.0.next().unwrap().unwrap_err())}),
@@ -251,7 +251,7 @@ impl<'l> Parser<'l>
 					Ok(args) =>
 					{
 						self.next_inner("';'")?;
-						Ok(Element{line, col, value: ElementValue::Instruction{name: Cow::Borrowed(name), args}})
+						Ok(Element{line, col, value: ElementValue::Instruction{name: Arcob::Borrowed(name), args}})
 					},
 					Err(e) => Err(e),
 				}
@@ -290,9 +290,9 @@ impl<'l> Parser<'l>
 					{
 						return Err(Self::expect("')'", &end));
 					}
-					Ok(Argument::Function{name: Cow::Borrowed(ident), args})
+					Ok(Argument::Function{name: Arcob::Borrowed(ident), args})
 				}
-				else {Ok(Argument::Identifier(Cow::Borrowed(ident)))}
+				else {Ok(Argument::Identifier(Arcob::Borrowed(ident)))}
 			},
 			TokenValue::String(val) => Ok(Argument::String(val)),
 			TokenValue::BeginGroup =>

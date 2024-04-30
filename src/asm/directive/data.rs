@@ -1,11 +1,11 @@
 use core::fmt;
 use core::mem;
-use std::borrow::Cow;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
 use std::sync::Arc;
 
+use crate::asm::arcob::Arcob;
 use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
 use crate::asm::constant::Realm;
 use crate::asm::directive::{Directive, DirectiveErrorKind};
@@ -17,7 +17,7 @@ use crate::text::token::Number;
 enum DataOp<'c>
 {
 	Completed,
-	Deferred{cause: Cow<'c, str>},
+	Deferred{cause: Arcob<'c, str>},
 }
 
 struct DataExpr<'l>
@@ -82,7 +82,7 @@ impl<'l> DataExpr<'l>
 				{
 					if let EvalError::NoSuchVariable{name, ..} = e
 					{
-						return Ok(DataOp::Deferred{cause: Cow::Owned(name)});
+						return Ok(DataOp::Deferred{cause: Arcob::Arced(name.into())});
 					}
 				}
 				self.push_error(ctx, e);
@@ -133,7 +133,7 @@ impl DataExpr<'static>
 				{
 					if global
 					{
-						let name = cause.into_owned();
+						let name = cause.as_ref().to_owned();
 						self.push_error(ctx, ConstantError::NotFound{name, realm: Realm::Global});
 						return Err(ErrorLevel::Trivial);
 					}

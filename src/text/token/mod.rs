@@ -1,8 +1,8 @@
 use core::fmt;
-use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::error::Error;
 
+use crate::asm::arcob::Arcob;
 use crate::text::Positioned;
 
 #[cfg(test)]
@@ -25,8 +25,8 @@ pub enum TokenValue<'l>
 	Not, BitAnd, BitOr, BitXor, LeftShift, RightShift,
 	Number(Number),
 	Identifier(&'l str),
-	String(Cow<'l, str>),
-	// TODO implement ByteString(Cow<'l, [u8]>),
+	String(Arcob<'l, str>),
+	// TODO implement ByteString(Arcob<'l, [u8]>),
 	BeginGroup, EndGroup,
 	BeginAddr, EndAddr,
 	BeginSeq, EndSeq,
@@ -458,7 +458,7 @@ impl<'l> Tokenizer<'l>
 					}
 				}
 				// it's simpler to just use `Self::update_pos()` instead of manually checking if the input (!) is an ASCII line
-				(pos, false, TokenValue::String(if !escaped.is_empty() {Cow::Owned(escaped)} else {Cow::Borrowed(&self.data[1..pos - 1])}))
+				(pos, false, TokenValue::String(if !escaped.is_empty() {Arcob::Arced(escaped.into())} else {Arcob::Borrowed(&self.data[1..pos - 1])}))
 			},
 			b'(' => (1, true, TokenValue::BeginGroup),
 			b')' => (1, true, TokenValue::EndGroup),
