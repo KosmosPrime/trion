@@ -1,6 +1,7 @@
 use core::fmt;
 use std::borrow::Cow;
 use std::error::Error;
+use std::sync::Arc;
 
 use crate::arm6m::asm::{ImmReg, Instruction, EncodeError};
 use crate::arm6m::cond::Condition;
@@ -60,7 +61,7 @@ impl InstructionSet for Arm6M
 	fn assemble(&self, ctx: &mut Context, line: u32, col: u32, name: &str, args: Vec<Argument>) -> Result<(), ErrorLevel>
 	{
 		let addr = ctx.active().unwrap().curr_addr();
-		match ArmInstr::new(line, col, name, addr, args)
+		match ArmInstr::new(ctx, line, col, name, addr, args)
 		{
 			Ok(mut instr) =>
 			{
@@ -74,7 +75,6 @@ impl InstructionSet for Arm6M
 					_ =>
 					{
 						instr.write_instr(ctx, true)?; // padding for whatever follows
-						instr.file_name = Some(ctx.curr_path().unwrap().to_string_lossy().into_owned());
 						instr.into_owned().schedule(ctx, false);
 						Ok(())
 					},
@@ -91,7 +91,7 @@ impl InstructionSet for Arm6M
 
 struct ArmInstr<'l>
 {
-	file_name: Option<String>,
+	file_name: Arc<String>,
 	line: u32,
 	col: u32,
 	addr: u32,
@@ -102,7 +102,7 @@ struct ArmInstr<'l>
 
 impl<'l> ArmInstr<'l>
 {
-	fn new(line: u32, col: u32, name: &str, addr: u32, args: Vec<Argument<'l>>) -> Result<Self, InstructionError>
+	fn new(ctx: &Context, line: u32, col: u32, name: &str, addr: u32, args: Vec<Argument<'l>>) -> Result<Self, InstructionError>
 	{
 		let mut temp_name = [0u8; 16];
 		let name = if name.len() < temp_name.len()
@@ -193,7 +193,7 @@ impl<'l> ArmInstr<'l>
 			"YIELD" => Instruction::Yield,
 			_ => return Err(Positioned{line, col, value: InstrErrorKind::NotFound(name.to_owned())}),
 		};
-		Ok(Self{file_name: None, line, col, addr, instr, args_done: 0, args})
+		Ok(Self{file_name: ctx.curr_file_name(), line, col, addr, instr, args_done: 0, args})
 	}
 	
 	fn push_error<E: Error + 'static>(&mut self, ctx: &mut Context, source: E)
@@ -203,8 +203,7 @@ impl<'l> ArmInstr<'l>
 	
 	fn push_error_raw(&mut self, ctx: &mut Context, err: InstrErrorKind)
 	{
-		let file_name = self.file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| "<unknown>".to_owned());
-		ctx.push_error_in(PosNamed{name: file_name, line: self.line, col: self.col, value: err});
+		ctx.push_error_in(PosNamed{name: self.file_name.clone(), line: self.line, col: self.col, value: err});
 	}
 	
 	fn into_owned(self) -> ArmInstr<'static>

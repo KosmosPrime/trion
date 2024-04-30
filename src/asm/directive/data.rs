@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
+use std::sync::Arc;
 
 use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
 use crate::asm::constant::Realm;
@@ -22,7 +23,7 @@ enum DataOp<'c>
 struct DataExpr<'l>
 {
 	dir_name: &'static str,
-	file_name: Option<String>,
+	file_name: Arc<String>,
 	line: u32,
 	col: u32,
 	addr: u32,
@@ -32,10 +33,10 @@ struct DataExpr<'l>
 
 impl<'l> DataExpr<'l>
 {
-	fn new(dir_name: &'static str, line: u32, col: u32, addr: u32, arg: Argument<'l>,
+	fn new(dir_name: &'static str, file_name: Arc<String>, line: u32, col: u32, addr: u32, arg: Argument<'l>,
 		writer: fn(&mut Context, &mut DataExpr<'_>) -> Result<(), ErrorLevel>) -> Self
 	{
-		Self{dir_name, file_name: None, line, col, addr, arg, writer}
+		Self{dir_name, file_name, line, col, addr, arg, writer}
 	}
 	
 	fn push_error<E: Error + 'static>(&mut self, ctx: &mut Context, source: E)
@@ -45,8 +46,7 @@ impl<'l> DataExpr<'l>
 	
 	fn push_error_raw(&mut self, ctx: &mut Context, err: DirectiveErrorKind)
 	{
-		let file_name = self.file_name.take().or_else(|| ctx.curr_path().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| "<unknown>".to_owned());
-		ctx.push_error_in(PosNamed{name: file_name, line: self.line, col: self.col, value: err});
+		ctx.push_error_in(PosNamed{name: self.file_name.clone(), line: self.line, col: self.col, value: err});
 	}
 	
 	fn into_owned(self) -> DataExpr<'static>
@@ -182,7 +182,7 @@ macro_rules!generate_expr
 					));
 					return Err(ErrorLevel::Trivial);
 				}
-				let mut data = DataExpr::new($label, args.line, args.col, addr, args.value.pop().unwrap(), |ctx, data|
+				let mut data = DataExpr::new($label, ctx.curr_file_name(), args.line, args.col, addr, args.value.pop().unwrap(), |ctx, data|
 				{
 					match data.arg
 					{
@@ -213,7 +213,6 @@ macro_rules!generate_expr
 					_ =>
 					{
 						data.write_data(ctx, &[0xBE; $size])?; // padding for whatever follows
-						data.file_name = Some(ctx.curr_path().unwrap().to_string_lossy().into_owned());
 						data.into_owned().schedule(ctx, false);
 						Ok(())
 					},
@@ -332,7 +331,7 @@ generate!
 {
 	DataFile(String) as "dfile" => |self, ctx, _active, args, path|
 	{
-		let mut path_buff = ctx.curr_path().unwrap().to_path_buf();
+		let mut path_buff = ctx.curr_file_path().unwrap().to_path_buf();
 		if !path_buff.pop() {path_buff.push("..");}
 		path_buff.push(path);
 		let active = ctx.active_mut().unwrap();

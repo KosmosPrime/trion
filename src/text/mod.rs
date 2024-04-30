@@ -1,5 +1,6 @@
 use core::fmt;
 use std::error::Error;
+use std::sync::Arc;
 
 mod operator;
 pub mod parse;
@@ -15,7 +16,7 @@ pub struct Positioned<T: ?Sized>
 
 impl<T> Positioned<T>
 {
-	pub fn with_name(self, name: String) -> PosNamed<T>
+	pub fn with_name(self, name: Arc<String>) -> PosNamed<T>
 	{
 		PosNamed
 		{
@@ -70,7 +71,7 @@ impl<T: Error + ?Sized> Error for Positioned<T>
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PosNamed<T: ?Sized>
 {
-	pub name: String,
+	pub name: Arc<String>,
 	pub line: u32,
 	pub col: u32,
 	pub value: T,

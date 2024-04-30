@@ -3,6 +3,7 @@ use core::num::NonZeroUsize;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::asm::constant::{Lookup, Realm};
 use crate::asm::directive::DirectiveList;
@@ -36,6 +37,7 @@ pub type TaskFn = dyn FnOnce(&mut Context) -> Result<(), ErrorLevel>;
 pub struct Context<'l>
 {
 	path_stack: Vec<PathBuf>,
+	curr_name: Arc<String>,
 	instructions: &'l dyn InstructionSet,
 	directives: &'l DirectiveList,
 	output: MemoryMap,
@@ -54,6 +56,7 @@ impl<'l> Context<'l>
 		Self
 		{
 			path_stack: Vec::new(),
+			curr_name: Arc::new("<unknown>".to_owned()),
 			instructions,
 			directives,
 			output: MemoryMap::new(),
@@ -66,9 +69,19 @@ impl<'l> Context<'l>
 		}
 	}
 	
-	pub fn curr_path(&self) -> Option<&Path>
+	pub fn has_curr_file(&self) -> bool
+	{
+		!self.path_stack.is_empty()
+	}
+	
+	pub fn curr_file_path(&self) -> Option<&Path>
 	{
 		self.path_stack.last().map(PathBuf::as_path)
+	}
+	
+	pub fn curr_file_name(&self) -> Arc<String>
+	{
+		self.curr_name.clone()
 	}
 	
 	pub fn get_instruction_set(&self) -> &'l dyn InstructionSet
@@ -337,11 +350,13 @@ impl<'l> Context<'l>
 	
 	pub fn assemble(&mut self, data: &[u8], path: PathBuf) -> (Result<(), ErrorLevel>, PathBuf)
 	{
+		let file_name = Arc::new(path.to_string_lossy().into_owned());
 		self.path_stack.push(path);
 		let count = NonZeroUsize::try_from(self.path_stack.len()).unwrap();
+		let curr_name = core::mem::replace(&mut self.curr_name, file_name);
 		let constants = core::mem::replace(&mut self.locals, Some(HashMap::new())).map(|c| core::mem::replace(&mut self.globals, c));
 		let tasks = core::mem::replace(&mut self.local_tasks, Some(Vec::new())).map(|t| core::mem::replace(&mut self.global_tasks, t));
-		let mut frame = PathFrame{ctx: self, count: Some(count), constants, tasks};
+		let mut frame = PathFrame{ctx: self, count: Some(count), name: Some(curr_name), constants, tasks};
 		let mut result = frame.ctx.do_assemble(data);
 		if result != Err(ErrorLevel::Fatal)
 		{
@@ -421,8 +436,7 @@ impl<'l> Context<'l>
 	
 	pub fn push_error<T: Error + 'static>(&mut self, error: Positioned<T>)
 	{
-		let name = self.path_stack.last().map_or_else(String::new, |p| p.to_string_lossy().into_owned());
-		self.errors.push(Box::new(error.with_name(name)));
+		self.errors.push(Box::new(error.with_name(self.curr_file_name())));
 	}
 	
 	pub fn push_error_in<T: Error + 'static>(&mut self, error: PosNamed<T>)
@@ -435,6 +449,7 @@ struct PathFrame<'l, 'c: 'l>
 {
 	ctx: &'l mut Context<'c>,
 	count: Option<NonZeroUsize>,
+	name: Option<Arc<String>>,
 	constants: Option<HashMap<String, Option<i64>>>,
 	tasks: Option<Vec<Box<TaskFn>>>,
 }
@@ -446,6 +461,7 @@ impl<'l, 'c: 'l> PathFrame<'l, 'c>
 		let count = self.count.unwrap();
 		assert_eq!(self.ctx.path_stack.len(), count.get());
 		let buff = self.ctx.path_stack.pop().unwrap();
+		self.ctx.curr_name = self.name.take().unwrap();
 		self.ctx.locals = self.constants.take().map(|c| core::mem::replace(&mut self.ctx.globals, c));
 		self.ctx.local_tasks = self.tasks.take().map(|t| core::mem::replace(&mut self.ctx.global_tasks, t));
 		// this replaces drop as this call takes the value back out
@@ -462,6 +478,7 @@ impl<'l, 'c: 'l> Drop for PathFrame<'l, 'c>
 		{
 			assert!(self.ctx.path_stack.len() == count.get());
 			self.ctx.path_stack.pop();
+			self.ctx.curr_name = self.name.take().unwrap();
 			self.ctx.locals = self.constants.take().map(|c| core::mem::replace(&mut self.ctx.globals, c));
 			self.ctx.local_tasks = self.tasks.take().map(|t| core::mem::replace(&mut self.ctx.global_tasks, t));
 		}

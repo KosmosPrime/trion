@@ -18,7 +18,7 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 		{
 			if !ctx.get_instruction_set().is_register(name)
 			{
-				let realm = if ctx.curr_path().is_none() {Realm::Global} else {Realm::Local};
+				let realm = if ctx.has_curr_file() {Realm::Local} else {Realm::Global};
 				return match ctx.get_constant(name, realm)
 				{
 					Lookup::NotFound => return Err(EvalError::NoSuchVariable{name: name.as_ref().to_owned(), realm: Realm::Local}),

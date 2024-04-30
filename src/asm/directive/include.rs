@@ -35,7 +35,7 @@ impl Directive for Include
 		{
 			Argument::String(ref path) =>
 			{
-				let mut curr = match ctx.curr_path()
+				let mut curr = match ctx.curr_file_path()
 				{
 					None => PathBuf::new(),
 					Some(prev) => prev.to_path_buf(),
