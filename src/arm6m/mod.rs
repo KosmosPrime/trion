@@ -268,7 +268,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
+										return Ok(AsmOp::Deferred{cause: name});
 									}
 								}
 								self.push_error(ctx, e);
@@ -413,7 +413,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
+										return Ok(AsmOp::Deferred{cause: name});
 									}
 								}
 								self.push_error(ctx, e);
@@ -516,7 +516,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
+										return Ok(AsmOp::Deferred{cause: name});
 									}
 								}
 								self.push_error(ctx, e);
@@ -573,7 +573,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
+										return Ok(AsmOp::Deferred{cause: name});
 									}
 								}
 								self.push_error(ctx, e);
@@ -627,7 +627,7 @@ impl<'l> ArmInstr<'l>
 								{
 									if let EvalError::NoSuchVariable{name, ..} = e
 									{
-										return Ok(AsmOp::Deferred{cause: Arcob::Arced(name.into())});
+										return Ok(AsmOp::Deferred{cause: name});
 									}
 								}
 								self.push_error(ctx, e);

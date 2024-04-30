@@ -82,7 +82,7 @@ impl<'l> DataExpr<'l>
 				{
 					if let EvalError::NoSuchVariable{name, ..} = e
 					{
-						return Ok(DataOp::Deferred{cause: Arcob::Arced(name.into())});
+						return Ok(DataOp::Deferred{cause: name});
 					}
 				}
 				self.push_error(ctx, e);

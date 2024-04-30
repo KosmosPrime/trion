@@ -21,7 +21,11 @@ pub fn evaluate<'l>(arg: &mut Argument<'l>, ctx: &Context<'_>) -> Result<Evaluat
 				let realm = if ctx.has_curr_file() {Realm::Local} else {Realm::Global};
 				return match ctx.get_constant(name, realm)
 				{
-					Lookup::NotFound => return Err(EvalError::NoSuchVariable{name: name.as_ref().to_owned(), realm: Realm::Local}),
+					Lookup::NotFound =>
+					{
+						name.make_arced();
+						return Err(EvalError::NoSuchVariable{name: Arcob::Arced(name.to_arc()), realm: Realm::Local});
+					},
 					Lookup::Deferred => return Ok(Evaluation::Deferred{changed: false, cause: name.clone()}),
 					Lookup::Found(val) =>
 					{
@@ -108,7 +112,7 @@ impl<'c> BitOr for Evaluation<'c>
 #[derive(Clone, Debug)]
 pub enum EvalError
 {
-	NoSuchVariable{name: String, realm: Realm},
+	NoSuchVariable{name: Arcob<'static, str>, realm: Realm},
 	BadType{kind: ArgumentType, op: ArgumentType},
 	Overflow(OverflowError),
 }

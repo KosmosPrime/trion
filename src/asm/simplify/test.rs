@@ -427,11 +427,11 @@ fn evaluate_err()
 	{
 		"nope", ctx => {Err(v, e)} in
 		{
-			assert!(matches!(e, EvalError::NoSuchVariable{ref name, realm: Realm::Local} if name == "nope"), "{v:?} -> {e:?}");
+			assert!(matches!(e, EvalError::NoSuchVariable{ref name, realm: Realm::Local} if name.as_ref() == "nope"), "{v:?} -> {e:?}");
 		},
 		"1 + r0 * nope", ctx => {Err(v, e)} in
 		{
-			assert!(matches!(e, EvalError::NoSuchVariable{ref name, realm: Realm::Local} if name == "nope"), "{v:?} -> {e:?}");
+			assert!(matches!(e, EvalError::NoSuchVariable{ref name, realm: Realm::Local} if name.as_ref() == "nope"), "{v:?} -> {e:?}");
 		},
 		"one / zero", ctx => {Err(v, e)} in
 		{
