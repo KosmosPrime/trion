@@ -12,6 +12,7 @@ use crate::asm::memory::map::{MemoryMap, PutError, Search};
 use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ElementValue, Parser, ParseErrorKind};
 
+pub mod arcob;
 pub mod constant;
 pub mod directive;
 pub mod instr;
