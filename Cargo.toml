@@ -2,6 +2,7 @@
 name = "trion"
 version = "0.7.0"
 edition = "2021"
+exclude = ["/.github/"]
 publish = false
 
 [dependencies]
