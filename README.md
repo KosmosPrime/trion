@@ -64,7 +64,7 @@ This is intended for syntax validation or testing purposes.
 - `".dstr" <value> ";"`: Outputs a string as-is (without padding, length prefix or terminal character).
 - `".dfile" <path> ";"`: Outputs the named file as-is, the `path` must be a string relative to the path of the current file.
 - `".global" <name> ";"`: Declares a deferred constant `name` which is exported at the end of the local scope.
-  It is an error for this constant to not be defined at the end of local scope, or if it is already defined (or deferred).
+  It is valid for the constant to already exist locally, including if deferred. In the former case, it is exported immediately.
 - `".import" <name> ";"`: Imports the (possibly deferred) constant `name` from the parent scope to the local scope.
 - `".export" <name> ";"`: Exports the existing, non-deferred constant `name` from the local scope to the parent scope.
 - `".include" <path> ";"`: Assembles the file at the relative `path` (must be a string) and outputs the result at the current address.

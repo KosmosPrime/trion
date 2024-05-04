@@ -51,7 +51,7 @@ impl Directive for Global
 		{
 			Self::Global =>
 			{
-				match ctx.defer_constant(name, Realm::Local)
+				match ctx.defer_constant(name, Realm::Global)
 				{
 					Ok(()) => (),
 					Err(ConstantError::Duplicate{name, realm}) =>
@@ -62,39 +62,55 @@ impl Directive for Global
 					},
 					Err(e) => unreachable!("{e:?}"),
 				}
-				let name = name.to_owned();
-				let (line, col) = (args.line, args.col);
-				let this = *self;
-				ctx.add_task(Box::new(move |ctx|
+				let curr_local = ctx.get_constant(name, Realm::Local);
+				match curr_local
 				{
-					let value = match ctx.get_constant(name.as_str(), Realm::Local)
+					Lookup::NotFound | Lookup::Deferred =>
 					{
-						Lookup::NotFound =>
+						if matches!(curr_local, Lookup::NotFound)
 						{
-							let source = Box::new(GlobalError::NotFound{name, realm: Realm::Local});
-							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
-							return Err(ErrorLevel::Trivial);
-						},
-						Lookup::Deferred =>
+							ctx.defer_constant(name, Realm::Local).unwrap();
+						}
+						let name = name.to_owned();
+						let (line, col) = (args.line, args.col);
+						let this = *self;
+						ctx.add_task(Box::new(move |ctx|
 						{
-							let source = Box::new(GlobalError::Deferred{name, realm: Realm::Local});
-							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
-							return Err(ErrorLevel::Trivial);
-						},
-						Lookup::Found(v) => v,
-					};
-					match ctx.insert_constant(name.as_str(), value, Realm::Global)
+							let value = match ctx.get_constant(name.as_str(), Realm::Local)
+							{
+								Lookup::NotFound =>
+								{
+									let source = Box::new(GlobalError::NotFound{name, realm: Realm::Local});
+									ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
+									return Err(ErrorLevel::Trivial);
+								},
+								Lookup::Deferred =>
+								{
+									let source = Box::new(GlobalError::Deferred{name, realm: Realm::Local});
+									ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
+									return Err(ErrorLevel::Trivial);
+								},
+								Lookup::Found(v) => v,
+							};
+							match ctx.insert_constant(name.as_str(), value, Realm::Global)
+							{
+								Ok(..) => Ok(()),
+								Err(ConstantError::Duplicate{name, realm}) =>
+								{
+									let source = Box::new(GlobalError::Duplicate{name, realm});
+									ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
+									Err(ErrorLevel::Trivial)
+								},
+								Err(e) => unreachable!("{e:?}"),
+							}
+						}), Realm::Local);
+					},
+					Lookup::Found(v) =>
 					{
-						Ok(..) => Ok(()),
-						Err(ConstantError::Duplicate{name, realm}) =>
-						{
-							let source = Box::new(GlobalError::Duplicate{name, realm});
-							ctx.push_error(Positioned{line, col, value: DirectiveErrorKind::Apply{dir: this.get_name().to_owned(), source}});
-							Err(ErrorLevel::Trivial)
-						},
-						Err(e) => unreachable!("{e:?}"),
-					}
-				}), Realm::Local);
+						// must return false since we've deferred it above
+						assert!(!ctx.insert_constant(name, v, Realm::Global).unwrap());
+					},
+				}
 			},
 			Self::Import | Self::Export =>
 			{
