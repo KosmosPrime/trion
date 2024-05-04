@@ -4,6 +4,7 @@ use std::error::Error;
 use crate::asm::{Context, ErrorLevel};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
+use crate::text::parse::choice::ArgChoice;
 
 pub trait InstructionSet
 {
@@ -20,7 +21,7 @@ pub enum InstrErrorKind
 	NotFound(String),
 	TooManyArguments{instr: String, max: usize, have: usize},
 	NotEnoughArguments{instr: String, need: usize, have: usize},
-	ArgumentType{instr: String, idx: usize, expect: ArgumentType, have: ArgumentType},
+	ArgumentType{instr: String, idx: usize, expect: ArgChoice, have: ArgumentType},
 	Assemble(Box<dyn Error>),
 }
 
@@ -33,7 +34,15 @@ impl fmt::Display for InstrErrorKind
 			Self::NotFound(name) => write!(f, "no such instruction {name:?}"),
 			Self::TooManyArguments{instr, max, have} => write!(f, "too many arguments for {instr} (max {max}, have {have})"),
 			Self::NotEnoughArguments{instr, need, have} => write!(f, "not enough arguments for {instr} (need {need}, have {have})"),
-			Self::ArgumentType{instr, idx, expect, have} => write!(f, "incorrect argument #{idx} for {instr} (expected {expect}, got {have})"),
+			Self::ArgumentType{instr, idx, expect, have} =>
+			{
+				match expect.size()
+				{
+					0 => write!(f, "invalid argument #{idx} for {instr} (got {have})"),
+					1 => write!(f, "invalid argument #{idx} for {instr} (expect {expect}, got {have})"),
+					_ => write!(f, "invalid argument #{idx} for {instr} (expect one of {{{expect}}}; got {have})"),
+				}
+			},
 			Self::Assemble(..) => f.write_str("instruction assembly failed"),
 		}
 	}

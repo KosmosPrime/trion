@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use crate::asm::{Context, ErrorLevel};
+use crate::text::parse::choice::ArgChoice;
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
 
@@ -81,7 +82,7 @@ pub enum DirectiveErrorKind
 	NotFound(String),
 	TooManyArguments{dir: String, max: usize, have: usize},
 	NotEnoughArguments{dir: String, need: usize, have: usize},
-	ArgumentType{dir: String, idx: usize, expect: ArgumentType, have: ArgumentType},
+	ArgumentType{dir: String, idx: usize, expect: ArgChoice, have: ArgumentType},
 	Apply{dir: String, source: Box<dyn Error + 'static>},
 }
 
@@ -94,7 +95,15 @@ impl fmt::Display for DirectiveErrorKind
 			Self::NotFound(dir) => write!(f, "no such directive \".{}\"", dir.escape_debug()),
 			Self::TooManyArguments{dir, max, have} => write!(f, "too many arguments for \".{}\" (max {max}, have {have})", dir.escape_debug()),
 			Self::NotEnoughArguments{dir, need, have} => write!(f, "not enough arguments for\".{}\" (need {need}, have {have})", dir.escape_debug()),
-			Self::ArgumentType{dir, idx, expect, have} => write!(f, "invalid argument #{idx} to \".{}\" (expect {expect}, got {have})", dir.escape_debug()),
+			Self::ArgumentType{dir, idx, expect, have} =>
+			{
+				match expect.size()
+				{
+					0 => write!(f, "invalid argument #{idx} to \".{}\" (got {have})", dir.escape_debug()),
+					1 => write!(f, "invalid argument #{idx} to \".{}\" (expect {expect}, got {have})", dir.escape_debug()),
+					_ => write!(f, "invalid argument #{idx} to \".{}\" (expect one of {{{expect}}}; got {have})", dir.escape_debug()),
+				}
+			},
 			Self::Apply{dir, ..} => write!(f, "failed to apply .{dir}"),
 		}
 	}

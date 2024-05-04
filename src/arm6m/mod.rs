@@ -11,9 +11,10 @@ use crate::asm::arcob::Arcob;
 use crate::asm::{ConstantError, Context, ErrorLevel, SegmentError};
 use crate::asm::constant::Realm;
 use crate::asm::instr::{InstrErrorKind, InstructionError, InstructionSet};
-use crate::asm::simplify::{evaluate, EvalError, Evaluation};
+use crate::asm::simplify::{EvalError, evaluate, Evaluation};
 use crate::text::{PosNamed, Positioned};
 use crate::text::parse::{Argument, ArgumentType};
+use crate::text::parse::choice::ArgChoice;
 use crate::text::token::Number;
 
 pub mod asm;
@@ -298,7 +299,7 @@ impl<'l> ArmInstr<'l>
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								expect: ArgumentType::Constant,
+								expect: ArgChoice::of(ArgumentType::Constant),
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -319,7 +320,7 @@ impl<'l> ArmInstr<'l>
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								expect: ArgumentType::Identifier,
+								expect: ArgChoice::of(ArgumentType::Identifier),
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -357,7 +358,7 @@ impl<'l> ArmInstr<'l>
 						{
 							instr: instr_name.to_owned(),
 							idx: arg_pos + 1,
-							expect: ArgumentType::Identifier,
+							expect: ArgChoice::of(ArgumentType::Identifier),
 							have,
 						});
 						return Err(ErrorLevel::Trivial);
@@ -390,7 +391,7 @@ impl<'l> ArmInstr<'l>
 						{
 							instr: instr_name.to_owned(),
 							idx: arg_pos + 1,
-							expect: ArgumentType::Identifier,
+							expect: ArgChoice::of(ArgumentType::Identifier),
 							have,
 						});
 						return Err(ErrorLevel::Trivial);
@@ -454,12 +455,11 @@ impl<'l> ArmInstr<'l>
 						ref arg =>
 						{
 							let have = arg.get_type();
-							// REM should indicate that an immediate value would also work
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								expect: ArgumentType::Identifier,
+								expect: ArgChoice::from([ArgumentType::Constant, ArgumentType::Identifier]),
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -493,7 +493,7 @@ impl<'l> ArmInstr<'l>
 						{
 							instr: instr_name.to_owned(),
 							idx: arg_pos + 1,
-							expect: ArgumentType::Sequence,
+							expect: ArgChoice::of(ArgumentType::Sequence),
 							have,
 						});
 						return Err(ErrorLevel::Trivial);
@@ -549,7 +549,7 @@ impl<'l> ArmInstr<'l>
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								expect: ArgumentType::Address,
+								expect: ArgChoice::of(ArgumentType::Address),
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -603,7 +603,7 @@ impl<'l> ArmInstr<'l>
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								expect: ArgumentType::Constant,
+								expect: ArgChoice::of(ArgumentType::Constant),
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -672,7 +672,7 @@ impl<'l> ArmInstr<'l>
 							{
 								instr: instr_name.to_owned(),
 								idx: arg_pos + 1,
-								expect: ArgumentType::Address,
+								expect: ArgChoice::from([ArgumentType::Constant, ArgumentType::Address]),
 								have,
 							});
 							return Err(ErrorLevel::Trivial);
@@ -1076,7 +1076,7 @@ fn regset<'l>(items: &Vec<Argument<'l>>, instr: &'l str, idx: usize) -> Result<R
 		match arg
 		{
 			Argument::Identifier(ident) => {regs.add(regl(ident, instr, idx)?);},
-			_ => return Err(InstrErrorKind::ArgumentType{instr: instr.to_owned(), idx, expect: ArgumentType::Identifier, have: arg.get_type()}),
+			_ => return Err(InstrErrorKind::ArgumentType{instr: instr.to_owned(), idx, expect: ArgChoice::of(ArgumentType::Identifier), have: arg.get_type()}),
 		}
 	}
 	Ok(regs)

@@ -12,6 +12,7 @@ use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::asm::simplify::{evaluate, EvalError, Evaluation};
 use crate::text::{Positioned, PosNamed};
 use crate::text::parse::{Argument, ArgumentType};
+use crate::text::parse::choice::ArgChoice;
 use crate::text::token::Number;
 
 enum DataOp<'c>
@@ -202,7 +203,7 @@ macro_rules!generate_expr
 						{
 							let dir = $label.to_owned();
 							let have = arg.get_type();
-							data.push_error_raw(ctx, DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::Constant, have});
+							data.push_error_raw(ctx, DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgChoice::of(ArgumentType::Constant), have});
 							Err(ErrorLevel::Trivial)
 						},
 					}
@@ -278,7 +279,7 @@ macro_rules!generate
 			ref arg =>
 			{
 				let dir = $self.get_name().to_owned();
-				let err = DirectiveErrorKind::ArgumentType{dir, idx: $idx, expect: ArgumentType::String, have: arg.get_type()};
+				let err = DirectiveErrorKind::ArgumentType{dir, idx: $idx, expect: ArgChoice::of(ArgumentType::String), have: arg.get_type()};
 				$ctx.push_error($args.convert(err));
 				return Err(ErrorLevel::Trivial);
 			},

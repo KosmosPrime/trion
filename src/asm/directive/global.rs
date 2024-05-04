@@ -6,6 +6,7 @@ use crate::asm::constant::{Lookup, Realm};
 use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
+use crate::text::parse::choice::ArgChoice;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Global
@@ -43,7 +44,7 @@ impl Directive for Global
 			ref arg =>
 			{
 				let dir = self.get_name().to_owned();
-				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::String, have: arg.get_type()}));
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgChoice::of(ArgumentType::String), have: arg.get_type()}));
 				return Err(ErrorLevel::Trivial);
 			},
 		};

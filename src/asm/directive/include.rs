@@ -8,6 +8,7 @@ use crate::asm::{Context, ErrorLevel};
 use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
+use crate::text::parse::choice::ArgChoice;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Include;
@@ -47,7 +48,7 @@ impl Directive for Include
 			ref arg =>
 			{
 				let dir = self.get_name().to_owned();
-				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::String, have: arg.get_type()}));
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgChoice::of(ArgumentType::String), have: arg.get_type()}));
 				return Err(ErrorLevel::Trivial);
 			},
 		};

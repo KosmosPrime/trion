@@ -7,6 +7,7 @@ use crate::asm::directive::{Directive, DirectiveErrorKind};
 use crate::asm::simplify::{evaluate, Evaluation};
 use crate::text::Positioned;
 use crate::text::parse::{Argument, ArgumentType};
+use crate::text::parse::choice::ArgChoice;
 use crate::text::token::Number;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,7 +38,7 @@ impl Directive for Const
 			have =>
 			{
 				let dir = self.get_name().to_owned();
-				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgumentType::Identifier, have}));
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 0, expect: ArgChoice::of(ArgumentType::Identifier), have}));
 				return Err(ErrorLevel::Trivial);
 			},
 		}
@@ -63,7 +64,13 @@ impl Directive for Const
 			ref arg =>
 			{
 				let dir = self.get_name().to_owned();
-				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType{dir, idx: 1, expect: ArgumentType::Constant, have: arg.get_type()}));
+				ctx.push_error(args.convert(DirectiveErrorKind::ArgumentType
+				{
+					dir,
+					idx: 1,
+					expect: ArgChoice::of(ArgumentType::Constant),
+					have: arg.get_type(),
+				}));
 				return Err(ErrorLevel::Trivial);
 			},
 		};
