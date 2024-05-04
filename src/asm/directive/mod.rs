@@ -99,9 +99,9 @@ impl fmt::Display for DirectiveErrorKind
 			{
 				match expect.size()
 				{
-					0 => write!(f, "invalid argument #{idx} to \".{}\" (got {have})", dir.escape_debug()),
-					1 => write!(f, "invalid argument #{idx} to \".{}\" (expect {expect}, got {have})", dir.escape_debug()),
-					_ => write!(f, "invalid argument #{idx} to \".{}\" (expect one of {{{expect}}}; got {have})", dir.escape_debug()),
+					0 => write!(f, "invalid argument #{} to \".{}\" (got {have})", idx + 1, dir.escape_debug()),
+					1 => write!(f, "invalid argument #{} to \".{}\" (expect {expect}, got {have})", idx + 1, dir.escape_debug()),
+					_ => write!(f, "invalid argument #{} to \".{}\" (expect one of {{{expect}}}; got {have})", idx + 1, dir.escape_debug()),
 				}
 			},
 			Self::Apply{dir, ..} => write!(f, "failed to apply .{dir}"),

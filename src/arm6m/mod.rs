@@ -298,7 +298,7 @@ impl<'l> ArmInstr<'l>
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
-								idx: arg_pos + 1,
+								idx: arg_pos,
 								expect: ArgChoice::of(ArgumentType::Constant),
 								have,
 							});
@@ -319,7 +319,7 @@ impl<'l> ArmInstr<'l>
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
-								idx: arg_pos + 1,
+								idx: arg_pos,
 								expect: ArgChoice::of(ArgumentType::Identifier),
 								have,
 							});
@@ -357,7 +357,7 @@ impl<'l> ArmInstr<'l>
 						self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 						{
 							instr: instr_name.to_owned(),
-							idx: arg_pos + 1,
+							idx: arg_pos,
 							expect: ArgChoice::of(ArgumentType::Identifier),
 							have,
 						});
@@ -390,7 +390,7 @@ impl<'l> ArmInstr<'l>
 						self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 						{
 							instr: instr_name.to_owned(),
-							idx: arg_pos + 1,
+							idx: arg_pos,
 							expect: ArgChoice::of(ArgumentType::Identifier),
 							have,
 						});
@@ -458,7 +458,7 @@ impl<'l> ArmInstr<'l>
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
-								idx: arg_pos + 1,
+								idx: arg_pos,
 								expect: ArgChoice::from([ArgumentType::Constant, ArgumentType::Identifier]),
 								have,
 							});
@@ -473,7 +473,7 @@ impl<'l> ArmInstr<'l>
 				{
 					Argument::Sequence(ref items) =>
 					{
-						let regs = match regset(items, instr_name, arg_pos + 1)
+						let regs = match regset(items, instr_name, arg_pos)
 						{
 							Ok(rs) => rs,
 							Err(e) =>
@@ -492,7 +492,7 @@ impl<'l> ArmInstr<'l>
 						self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 						{
 							instr: instr_name.to_owned(),
-							idx: arg_pos + 1,
+							idx: arg_pos,
 							expect: ArgChoice::of(ArgumentType::Sequence),
 							have,
 						});
@@ -548,7 +548,7 @@ impl<'l> ArmInstr<'l>
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
-								idx: arg_pos + 1,
+								idx: arg_pos,
 								expect: ArgChoice::of(ArgumentType::Address),
 								have,
 							});
@@ -602,7 +602,7 @@ impl<'l> ArmInstr<'l>
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
-								idx: arg_pos + 1,
+								idx: arg_pos,
 								expect: ArgChoice::of(ArgumentType::Constant),
 								have,
 							});
@@ -671,7 +671,7 @@ impl<'l> ArmInstr<'l>
 							self.push_error_raw(ctx, InstrErrorKind::ArgumentType
 							{
 								instr: instr_name.to_owned(),
-								idx: arg_pos + 1,
+								idx: arg_pos,
 								expect: ArgChoice::from([ArgumentType::Constant, ArgumentType::Address]),
 								have,
 							});
@@ -1139,8 +1139,8 @@ impl fmt::Display for AsmError
 	{
 		match self
 		{
-			Self::ValueRange{instr, idx} => write!(f, "argument #{idx} for {instr} is out of range"),
-			Self::NoSuchRegister{instr, idx, what} => write!(f, "argument #{idx} for {instr} has invalid register {what:?}"),
+			Self::ValueRange{instr, idx} => write!(f, "argument #{} for {instr} is out of range", idx + 1),
+			Self::NoSuchRegister{instr, idx, what} => write!(f, "argument #{} for {instr} has invalid register {what:?}", idx + 1),
 			Self::Encode(..) => f.write_str("could not encode instruction"),
 			Self::Write(..) => f.write_str("could not write instruction to segment"),
 		}

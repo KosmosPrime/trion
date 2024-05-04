@@ -38,9 +38,9 @@ impl fmt::Display for InstrErrorKind
 			{
 				match expect.size()
 				{
-					0 => write!(f, "invalid argument #{idx} for {instr} (got {have})"),
-					1 => write!(f, "invalid argument #{idx} for {instr} (expect {expect}, got {have})"),
-					_ => write!(f, "invalid argument #{idx} for {instr} (expect one of {{{expect}}}; got {have})"),
+					0 => write!(f, "invalid argument #{} for {instr} (got {have})", idx + 1),
+					1 => write!(f, "invalid argument #{} for {instr} (expect {expect}, got {have})", idx + 1),
+					_ => write!(f, "invalid argument #{} for {instr} (expect one of {{{expect}}}; got {have})", idx + 1),
 				}
 			},
 			Self::Assemble(..) => f.write_str("instruction assembly failed"),
