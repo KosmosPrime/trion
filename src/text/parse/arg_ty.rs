@@ -4,7 +4,10 @@ use crate::macros::numeric_enum;
 
 numeric_enum!
 {
-	pub enum ArgumentType for u8 | TryFromU8Error
+	#[enum(pub u8)]
+	#[TryFrom(u8 => TryFromU8Error: as(pub struct), derive(Display), derive(Error))]
+	#[Into(u8)]
+	enum ArgumentType
 	{
 		Constant, Identifier, String,
 		Add, Negate, Subtract, Multiply, Divide, Modulo,
