@@ -9,21 +9,14 @@ pub struct ArgChoice(u32);
 
 const ALL: u32 =
 {
-	macro_rules!generate
+	let mut result = 0u32;
+	let mut i = 0;
+	while i < ArgumentType::ALL.len()
 	{
-		($($name:ident),+) =>
-		{
-			$(1u32 << ArgumentType::$name as u32)|+
-		}
+		result |= 1u32 << ArgumentType::ALL[i] as u32;
+		i += 1;
 	}
-	
-	generate!
-	{
-		Constant, Identifier, String,
-		Add, Negate, Subtract, Multiply, Divide, Modulo,
-		Not, BitAnd, BitOr, BitXor, LeftShift, RightShift,
-		Address, Sequence, Function
-	}
+	result
 };
 
 impl ArgChoice
@@ -236,79 +229,47 @@ mod test
 {
 	use super::*;
 	
-	macro_rules!generate
+	#[test]
+	fn test_variants_fit_u32()
 	{
-		($($name:ident),+) =>
+		for &curr in ArgumentType::ALL
 		{
-			// compile-time "test" which checks that we know all variants
-			#[allow(dead_code)]
-			fn test_variant_set(ty: ArgumentType)
-			{
-				match ty
-				{
-					$(ArgumentType::$name)|+ => (),
-				}
-			}
-			
-			#[test]
-			fn test_variants_fit_u32()
-			{
-				$(
-					assert!(u32::from(u8::from(ArgumentType::$name)) < u32::BITS, "argument type index out of bounds: {} maps to {}",
-						ArgumentType::$name, u8::from(ArgumentType::$name));
-				)+
-			}
-			
-			#[test]
-			fn test_all_is_all()
-			{
-				// sanity check to ensure the variants used to compute the `ALL` constant above don't differ
-				$(
-					assert_ne!(ALL & (1 << u32::from(u8::from(ArgumentType::$name))), 0, "argument type {} is not in `ArgChoice::all()`",
-						ArgumentType::$name);
-				)+
-				// don't need to check that other bits are 0 as we obtain the mask from `ArgumentType` values
-				
-				let size = [$(generate!(@impl/count/map $name)),+].len();
-				assert_eq!(ArgChoice::all().size(), size);
-				let size_hint = ArgChoice::all().iter().size_hint();
-				assert_eq!(size_hint.0, size);
-				assert_eq!(size_hint.1, Some(size));
-			}
-			
-			#[test]
-			fn test_one_to_string()
-			{
-				$(
-					let string = ArgChoice::of(ArgumentType::$name).to_string();
-					let expect = ArgumentType::$name.to_string();
-					assert_eq!(string, expect, "`ArgChoice::of({:?}).to_string()` produces {string:?}, expected {expect:?}", ArgumentType::$name);
-				)+
-			}
-			
-			#[test]
-			fn test_all_to_string()
-			{
-				let string = ArgChoice::all().to_string();
-				const ALL_TY: &[ArgumentType] = &[$(ArgumentType::$name),+];
-				let mut expect = String::new();
-				for i in 0..ALL_TY.len()
-				{
-					if i > 0 {expect.push_str(", ");}
-					use fmt::Write;
-					write!(&mut expect, "{}", ALL_TY[i]).unwrap();
-				}
-				assert_eq!(string, expect, "`ArgChoice::all().to_string()` produces {string:?}, expected {expect:?}");
-			}
-		};
-		(@impl/count/map $variant:ident) => {()};
+			assert!(u32::from(u8::from(curr)) < u32::BITS, "argument type index out of bounds: {curr} maps to {}", u8::from(curr));
+		}
 	}
 	
-	generate!
+	#[test]
+	fn test_all_size()
 	{
-		Constant, Identifier, String,
-		Add, Negate, Subtract, Multiply, Divide, Modulo,
-		Not, BitAnd, BitOr, BitXor, LeftShift, RightShift,
-		Address, Sequence, Function
+		let size = ArgumentType::ALL.len();
+		assert_eq!(ArgChoice::all().size(), size);
+		let size_hint = ArgChoice::all().iter().size_hint();
+		assert_eq!(size_hint.0, size);
+		assert_eq!(size_hint.1, Some(size));
+	}
+	
+	#[test]
+	fn test_one_to_string()
+	{
+		for &curr in ArgumentType::ALL
+		{
+			let string = ArgChoice::of(curr).to_string();
+			let expect = curr.to_string();
+			assert_eq!(string, expect, "`ArgChoice::of({curr:?}).to_string()` produces {string:?}, expected {expect:?}");
+		}
+	}
+	
+	#[test]
+	fn test_all_to_string()
+	{
+		let string = ArgChoice::all().to_string();
+		let mut expect = String::new();
+		for i in 0..ArgumentType::ALL.len()
+		{
+			if i > 0 {expect.push_str(", ");}
+			use fmt::Write;
+			write!(&mut expect, "{}", ArgumentType::ALL[i]).unwrap();
+		}
+		assert_eq!(string, expect, "`ArgChoice::all().to_string()` produces {string:?}, expected {expect:?}");
 	}
 }

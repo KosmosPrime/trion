@@ -105,5 +105,15 @@ macro_rules!numeric_enum
 			}
 		}
 	};
+	{
+		@impl/ext/const_all $tname:ident {$($var_name:ident $(= $var_val:literal)?),*}
+		($vis:vis $cname:ident)
+	} =>
+	{
+		impl $tname
+		{
+			$vis const $cname: &'static [$tname] = &[$($tname::$var_name),*];
+		}
+	};
 }
 pub(crate) use numeric_enum;

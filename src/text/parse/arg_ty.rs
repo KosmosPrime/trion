@@ -7,6 +7,7 @@ numeric_enum!
 	#[enum(pub u8)]
 	#[TryFrom(u8 => TryFromU8Error: as(pub struct), derive(Display), derive(Error))]
 	#[Into(u8)]
+	#[const_all(pub ALL)]
 	enum ArgumentType
 	{
 		Constant, Identifier, String,
