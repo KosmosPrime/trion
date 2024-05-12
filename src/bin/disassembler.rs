@@ -1,23 +1,40 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::OpenOptions;
+use std::io::Read;
 
-use crate::arm6m::asm::Instruction;
+use trion::arm6m::asm::Instruction;
 
-pub fn disassemble(input: &[u8], base: u32)
+pub fn main()
 {
+	let mut args = std::env::args();
+	assert!(args.next().is_some());
+	let Some(fp) = args.next()
+	else
+	{
+		eprintln!("Missing input file argument");
+		return;
+	};
+	
+	let mut buff = Vec::new();
+	let mut f = OpenOptions::new().read(true).open(fp).unwrap();
+	f.read_to_end(&mut buff).unwrap();
+	drop(f);
+	
+	const BASE: u32 = 0x20000000;
 	let mut queries = BTreeSet::new();
 	let mut instrs = BTreeMap::new();
 	let mut branches = BTreeSet::new();
-	queries.insert(base);
+	queries.insert(BASE);
 	while let Some(&start) = queries.iter().next()
 	{
 		queries.remove(&start);
-		if start >= base && start - base < input.len() as u32
+		if start >= BASE && start - BASE < buff.len() as u32
 		{
-			let mut pos = (start - base) as usize;
-			while pos < input.len()
+			let mut pos = (start - BASE) as usize;
+			while pos < buff.len()
 			{
-				let result = Instruction::decode(&input[pos..]).unwrap();
-				let addr = base + pos as u32;
+				let result = Instruction::decode(&buff[pos..]).unwrap();
+				let addr = BASE + pos as u32;
 				queries.remove(&addr);
 				if let Some(dst) = result.1.get_branch(addr)
 				{
@@ -35,9 +52,9 @@ pub fn disassemble(input: &[u8], base: u32)
 		}
 	}
 	
-	println!(".addr 0x{base:08X}");
+	println!(".addr 0x{BASE:08X}");
 	let mut space = false;
-	let mut last = base;
+	let mut last = BASE;
 	for (addr, (instr, after)) in instrs
 	{
 		if addr != last

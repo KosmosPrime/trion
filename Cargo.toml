@@ -1,6 +1,6 @@
 [package]
 name = "trion"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 exclude = ["/.github/"]
 description = "Trion is an assembler designed to be used with the Raspberry Pico (RP2040) microcontroller."
@@ -8,5 +8,16 @@ authors = ["KosmosPrime <5663514+KosmosPrime@users.noreply.github.com>"]
 repository = "https://github.com/KosmosPrime/trion"
 readme = "README.md"
 license = "MIT"
+autobins = false
+
+[[bin]]
+name = "trias"
+path = "src/bin/assembler.rs"
+test = false
+
+[[bin]]
+name = "tridas"
+path = "src/bin/disassembler.rs"
+test = false
 
 [dependencies]

@@ -1,13 +1,15 @@
 use std::error::Error;
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
-use crate::arm6m::Arm6M;
-use crate::asm::directive::DirectiveList;
-use crate::asm::Context;
-use crate::asm::memory::MemoryRange;
-use crate::asm::memory::map::Search;
-use crate::uf2::write::Uf2Write;
-use crate::uf2::crc::Crc;
+use trion::arm6m::Arm6M;
+use trion::asm::directive::DirectiveList;
+use trion::asm::Context;
+use trion::asm::memory::MemoryRange;
+use trion::asm::memory::map::Search;
+use trion::uf2::write::Uf2Write;
+use trion::uf2::crc::Crc;
 
 macro_rules!print_err
 {
@@ -136,4 +138,34 @@ pub fn assemble(buff: &mut Vec<u8>, path: PathBuf) -> bool
 		true
 	}
 	else {false}
+}
+
+pub fn main()
+{
+	let mut args = std::env::args();
+	assert!(args.next().is_some());
+	let Some(fip) = args.next()
+	else
+	{
+		eprintln!("Missing assembly file argument");
+		return;
+	};
+	let out_arg = args.next();
+	
+	let path = Path::new(&fip);
+	let mut buff = Vec::new();
+	let mut fi = OpenOptions::new().read(true).open(path).unwrap();
+	fi.read_to_end(&mut buff).unwrap();
+	drop(fi);
+	if assemble(&mut buff, path.to_path_buf())
+	{
+		if let Some(fop) = out_arg
+		{
+			let mut fo = OpenOptions::new().write(true).create(true).open(fop).unwrap();
+			fo.write_all(&buff.as_ref()).unwrap();
+			fo.set_len(u64::try_from(buff.len()).unwrap()).unwrap();
+			drop(fo);
+		}
+		else {println!("Assembled successfully");}
+	}
 }

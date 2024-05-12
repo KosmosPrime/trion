@@ -1,6 +1,15 @@
 # Trion
 Trion is an assembler (with some disassembling capabilities) designed to be used with the Raspberry Pico (RP2040) microcontroller.
 
+## Running
+You can run the executables in this package in one of 2 ways:
+- First using `cargo install trion` (see also the `--bin <name>` option in the [cargo docs](https://doc.rust-lang.org/cargo/commands/cargo-install.html)) and later run the installed version with just `trias <args>` or `tridas <args>`.
+- Directly with `cargo run --bin <name>` where `trias` is the assembler and `tridas` the disassembler.
+
+If you opt for the latter option, keep in mind that this documentation uses the former method for brevity. Installing also doesn't require the command to be run from within the package folder, but on the other hand requires you to manually reinstall after every version change and is thus unsuitable for development.
+
+The package can also be used as a library (as used by [the samples repo](https://github.com/KosmosPrime/trion-samples)) and therefore does not have a default executable (you must specify one). When used as such, the main code which handles file reading, assembling and writing the output will be absent but the functionality responsible for assembly (including the parser, instructions and output format helper) are available to be used in different contexts.
+
 ## Assembly Syntax
 Trion's assembly syntax is mostly similar to that of other assemblers, with slight modifications to simplify the parsing step.
 
@@ -47,7 +56,7 @@ Use of constants is dictated by scope: with the exception of importing/exporting
 It is possible to declare a constant after it is used (especially labels) but search won't escape to parent scope unless the constant is deferred.
 
 ## Assembling
-Usage: `cargo run assemble <input_file.asm> [<ouput_file.uf2>]`  
+Usage: `trias <input_file.asm> [<ouput_file.uf2>]`  
 The assembler is used to turn human-readable assembly source code into a UF2 container recognized by the RP2040's startup routine.
 As such, it is possible for the assembler to directly upload code onto the device via USB by choosing an output path within the device's drive.
 The output file argument is optional however, if omitted the assembler will proceed as normal but will not save the final output.
@@ -79,7 +88,7 @@ Instructions have the same names but, unlike ARM's UAL, require a terminal semic
 Flags are only supported (and in fact required) for the `UDF` instruction (which has narrow and wide representations).
 
 ## Disassembling
-Usage: `cargo run disassemble <input_file.bin>`  
+Usage: `tridas <input_file.bin>`  
 The disassembler is not the exact inverse of the assembler. For example, it requires as input a binary file containing only the opcodes, not a UF2 container.
 Therefore, and because assembling strips label names, the disassembler will assume the binary is mounted at addess `0x2000000` (the start of SRAM on the
 RP2040) and generate hexadecimal label names based on these addresses.
