@@ -135,7 +135,7 @@ impl fmt::Display for EvalError
 	{
 		match self
 		{
-			Self::NoSuchVariable{ref name, realm} => write!(f, "no such {realm} constant {name:?}"),
+			Self::NoSuchVariable{ref name, realm} => write!(f, "no such {realm} constant {:?}", name.as_ref()),
 			Self::BadType{kind, op} => write!(f, "{op} not supported for {kind}"),
 			Self::Overflow(..) => f.write_str("arithmetic overflow"),
 		}
