@@ -22,6 +22,8 @@ pub mod cond;
 pub mod sysreg;
 pub mod reg;
 pub mod regset;
+#[cfg(test)]
+mod test;
 
 enum AsmOp<'c>
 {
@@ -118,10 +120,11 @@ impl<'l> ArmInstr<'l>
 		let instr = match name
 		{
 			"ADCS" => Instruction::Adc{dst: Register::R0, rhs: Register::R0},
-			"ADD" | "ADDS" => Instruction::Add{flags: name.len() > 3, dst: Register::R0, lhs: Register::R0, rhs: ImmReg::Immediate(0)},
+			"ADD" => Instruction::Add{flags: false, dst: Register::SP, lhs: Register::SP, rhs: ImmReg::Immediate(0)},
+			"ADDS" => Instruction::Add{flags: true, dst: Register::R0, lhs: Register::R0, rhs: ImmReg::Immediate(0)},
 			"ADR" => Instruction::Adr{dst: Register::R0, off: 0},
 			"ANDS" => Instruction::And{dst: Register::R0, rhs: Register::R0},
-			"ASRS" => Instruction::Asr{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(0)},
+			"ASRS" => Instruction::Asr{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(1)},
 			"B" => Instruction::B{cond: Condition::Always, off: 0},
 			"BCC" => Instruction::B{cond: Condition::CarryClear, off: 0},
 			"BCS" => Instruction::B{cond: Condition::CarrySet, off: 0},
@@ -158,17 +161,17 @@ impl<'l> ArmInstr<'l>
 			"LDRH" => Instruction::Ldrh{dst: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
 			"LDRSB" => Instruction::Ldrsb{dst: Register::R0, addr: Register::R0, off: Register::R0},
 			"LDRSH" => Instruction::Ldrsh{dst: Register::R0, addr: Register::R0, off: Register::R0},
-			"LSLS" => Instruction::Lsl{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(0)},
-			"LSRS" => Instruction::Lsr{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(0)},
-			"MOV" | "MOVS" => Instruction::Mov{flags: name.len() > 3, dst: Register::R0, src: ImmReg::Immediate(0)},
+			"LSLS" => Instruction::Lsl{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(1)},
+			"LSRS" => Instruction::Lsr{dst: Register::R0, value: Register::R0, shift: ImmReg::Immediate(1)},
+			"MOV" | "MOVS" => Instruction::Mov{flags: name.len() > 3, dst: Register::R0, src: ImmReg::Register(Register::R0)},
 			"MRS" => Instruction::Mrs{dst: Register::R0, src: SystemReg::XPSR},
 			"MSR" => Instruction::Msr{dst: SystemReg::XPSR, src: Register::R0},
 			"MULS" => Instruction::Mul{dst: Register::R0, rhs: Register::R0},
 			"MVNS" => Instruction::Mvn{dst: Register::R0, value: Register::R0},
 			"NOP" => Instruction::Nop,
 			"ORRS" => Instruction::Orr{dst: Register::R0, rhs: Register::R0},
-			"POP" => Instruction::Pop{registers: RegisterSet::new()},
-			"PUSH" => Instruction::Push{registers: RegisterSet::new()},
+			"POP" => Instruction::Pop{registers: RegisterSet::of(1 << u8::from(Register::R0))},
+			"PUSH" => Instruction::Push{registers: RegisterSet::of(1 << u8::from(Register::R0))},
 			"REV" => Instruction::Rev{dst: Register::R0, value: Register::R0},
 			"REV16" => Instruction::Rev16{dst: Register::R0, value: Register::R0},
 			"REVSH" => Instruction::Revsh{dst: Register::R0, value: Register::R0},
@@ -180,7 +183,8 @@ impl<'l> ArmInstr<'l>
 			"STR" => Instruction::Str{src: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
 			"STRB" => Instruction::Strb{src: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
 			"STRH" => Instruction::Strh{src: Register::R0, addr: Register::R0, off: ImmReg::Immediate(0)},
-			"SUB" | "SUBS" => Instruction::Sub{flags: name.len() > 3, dst: Register::R0, lhs: Register::R0, rhs: ImmReg::Immediate(0)},
+			"SUB" => Instruction::Sub{flags: false, dst: Register::SP, lhs: Register::SP, rhs: ImmReg::Immediate(0)},
+			"SUBS" => Instruction::Sub{flags: true, dst: Register::R0, lhs: Register::R0, rhs: ImmReg::Immediate(0)},
 			"SVC" => Instruction::Svc{info: 0},
 			"SXTB" => Instruction::Sxtb{dst: Register::R0, value: Register::R0},
 			"SXTH" => Instruction::Sxth{dst: Register::R0, value: Register::R0},
