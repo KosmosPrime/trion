@@ -306,3 +306,65 @@ fn remove()
 	template.remove_range(MemoryRange::ALL);
 	assert_eq!(template.len(), 0);
 }
+
+#[test]
+fn overflow()
+{
+	let mut near_min = MemoryMap::new();
+	assert_eq!(near_min.put(1, b"b"), Ok(1));
+	assert_eq!(near_min.find(0, Search::Above), Some(MemoryRange{first: 1, last: 1}));
+	assert_eq!(near_min.find(1, Search::Above), Some(MemoryRange{first: 1, last: 1}));
+	assert_eq!(near_min.find(0, Search::Exact), None);
+	assert_eq!(near_min.find(1, Search::Exact), Some(MemoryRange{first: 1, last: 1}));
+	assert_eq!(near_min.find(0, Search::Below), None);
+	assert_eq!(near_min.find(1, Search::Below), Some(MemoryRange{first: 1, last: 1}));
+	assert_eq!(near_min.put(0, b"a"), Ok(1));
+	assert_eq!(near_min.count(), (2, 1));
+	assert_eq!(near_min.find(0, Search::Above), Some(MemoryRange{first: 0, last: 1}));
+	assert_eq!(near_min.find(1, Search::Above), Some(MemoryRange{first: 0, last: 1}));
+	assert_eq!(near_min.find(0, Search::Exact), Some(MemoryRange{first: 0, last: 1}));
+	assert_eq!(near_min.find(1, Search::Exact), Some(MemoryRange{first: 0, last: 1}));
+	assert_eq!(near_min.find(0, Search::Below), Some(MemoryRange{first: 0, last: 1}));
+	assert_eq!(near_min.find(1, Search::Below), Some(MemoryRange{first: 0, last: 1}));
+	near_min.remove_range(MemoryRange::new(1, 2));
+	assert_eq!(near_min.count(), (1, 1));
+	assert_eq!(near_min.find(0, Search::Above), Some(MemoryRange{first: 0, last: 0}));
+	assert_eq!(near_min.find(1, Search::Above), None);
+	assert_eq!(near_min.find(0, Search::Exact), Some(MemoryRange{first: 0, last: 0}));
+	assert_eq!(near_min.find(1, Search::Exact), None);
+	assert_eq!(near_min.find(0, Search::Below), Some(MemoryRange{first: 0, last: 0}));
+	assert_eq!(near_min.find(1, Search::Below), Some(MemoryRange{first: 0, last: 0}));
+	near_min.remove_range(MemoryRange::new(1, 2));
+	let mut iter = near_min.iter();
+	assert_eq!(iter.next(), Some((MemoryRange{first: 0, last: 0}, b"a".as_ref())));
+	assert_eq!(iter.next(), None);
+	
+	let mut near_max = MemoryMap::new();
+	assert_eq!(near_max.put(u32::MAX - 1, b"b"), Ok(1));
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Above), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 1}));
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Above), None);
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Exact), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 1}));
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Exact), None);
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Below), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 1}));
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Below), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 1}));
+	assert_eq!(near_max.put(u32::MAX - 0, b"a"), Ok(1));
+	assert_eq!(near_max.count(), (2, 1));
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Above), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Above), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Exact), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Exact), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Below), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Below), Some(MemoryRange{first: u32::MAX - 1, last: u32::MAX - 0}));
+	near_max.remove_range(MemoryRange::new(u32::MAX - 2, u32::MAX - 1));
+	assert_eq!(near_max.count(), (1, 1));
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Above), Some(MemoryRange{first: u32::MAX - 0, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Above), Some(MemoryRange{first: u32::MAX - 0, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Exact), None);
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Exact), Some(MemoryRange{first: u32::MAX - 0, last: u32::MAX - 0}));
+	assert_eq!(near_max.find(u32::MAX - 1, Search::Below), None);
+	assert_eq!(near_max.find(u32::MAX - 0, Search::Below), Some(MemoryRange{first: u32::MAX - 0, last: u32::MAX - 0}));
+	near_max.remove_range(MemoryRange::new(u32::MAX - 2, u32::MAX - 1));
+	let mut iter = near_max.iter();
+	assert_eq!(iter.next(), Some((MemoryRange{first: u32::MAX, last: u32::MAX}, b"a".as_ref())));
+	assert_eq!(iter.next(), None);
+}

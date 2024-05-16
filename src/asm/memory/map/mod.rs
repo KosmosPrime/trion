@@ -279,7 +279,7 @@ impl MemoryMap
 	{
 		match self.locate(range.first, Search::Above)
 		{
-			Some(first_idx) if self.parts[first_idx].range.last >= range.first =>
+			Some(first_idx) if range.last >= self.parts[first_idx].range.first =>
 			{
 				let first = &mut self.parts[first_idx];
 				if range.first > first.range.first && range.last < first.range.last
@@ -316,25 +316,32 @@ impl MemoryMap
 						false // never drop because `range.first > first.range.first`
 					};
 					
-					// we know that something exists not after `range.last` so this must exist too
-					let last_idx = self.locate(range.last, Search::Below).unwrap();
-					if last_idx > first_idx
+					// we know that something exists not after `range.last` but above may have truncated it
+					match self.locate(range.last, Search::Below)
 					{
-						let last = &mut self.parts[last_idx];
-						// we know `range.first < last.range.last` because `range.first <= first.range.last` (from locate)
-						let remove_last = if range.last < last.range.last
+						// only possible if above code cut this segment from the begining, in which case this is always false
+						None => assert!(!remove_first),
+						Some(last_idx) =>
 						{
-							// cut from the beginning
-							last.data.drain(..(range.last + 1 - last.range.first) as usize);
-							last.range.first = range.last + 1;
-							false
-						}
-						else {true};
-						self.parts.drain(first_idx + (!remove_first) as usize..last_idx + remove_last as usize);
-					}
-					else
-					{
-						if remove_first {self.parts.remove(first_idx);}
+							if last_idx > first_idx
+							{
+								let last = &mut self.parts[last_idx];
+								// we know `range.first < last.range.last` because `range.first <= first.range.last` (from locate)
+								let remove_last = if range.last < last.range.last
+								{
+									// cut from the beginning
+									last.data.drain(..(range.last + 1 - last.range.first) as usize);
+									last.range.first = range.last + 1;
+									false
+								}
+								else {true};
+								self.parts.drain(first_idx + (!remove_first) as usize..last_idx + remove_last as usize);
+							}
+							else
+							{
+								if remove_first {self.parts.remove(first_idx);}
+							}
+						},
 					}
 				}
 			},

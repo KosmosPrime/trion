@@ -1,6 +1,6 @@
 [package]
 name = "trion"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 exclude = ["/.github/"]
 description = "Trion is an assembler designed to be used with the Raspberry Pico (RP2040) microcontroller."
